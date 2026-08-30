@@ -1,0 +1,14 @@
+{
+  "name": "youtube-converter-api",
+  "version": "1.0.0",
+  "description": "API service for YouTube converter",
+  "main": "api.js",
+  "scripts": {
+    "start": "node api.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "bullmq": "^5.1.0",
+    "uuid": "^9.0.0"
+  }
+}

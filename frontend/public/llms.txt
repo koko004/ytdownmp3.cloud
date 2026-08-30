@@ -1,0 +1,25 @@
+# youtubemp3.sbs
+
+## Free YouTube to MP3 and MP4 Converter
+
+Convert YouTube videos to high-quality MP3 audio or MP4 video files. No ads, no signup, completely free.
+
+### Features
+
+- Convert YouTube videos to MP3 (audio) or MP4 (video)
+- High-quality output (up to 320kbps audio)
+- Automatic album art embedding for MP3 files
+- No registration required
+- No ads or popups
+- Fast conversion using yt-dlp
+
+### How to Use
+
+1. Paste a YouTube video URL into the input field
+2. Select MP3 or MP4 format
+3. Click Convert
+4. Download your file
+
+### Links
+
+- [Home](https://youtubemp3.sbs/)

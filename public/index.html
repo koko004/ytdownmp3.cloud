@@ -3,7 +3,18 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>youtubemp3.sbs</title>
+  <title>YouTube MP3 Converter – Free YouTube to MP3/MP4 Downloader</title>
+  <meta name="description" content="Convert YouTube videos to MP3 or MP4 instantly. Free, no ads, no signup. Paste a link and download high-quality audio and video.">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://youtubemp3.sbs/">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="YouTube MP3 Converter – Free YouTube to MP3/MP4 Downloader">
+  <meta property="og:description" content="Convert YouTube videos to MP3 or MP4 instantly. Free, no ads, no signup.">
+  <meta property="og:url" content="https://youtubemp3.sbs/">
+  <meta property="og:site_name" content="youtubemp3.sbs">
+  <meta name="twitter:card" content="summary">
+  <link rel="preconnect" href="https://static.cloudflareinsights.com">
+  <link rel="dns-prefetch" href="https://static.cloudflareinsights.com">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -98,8 +109,8 @@
     }
 
     .format-btn.active {
-      border-color: #e94560;
-      background: #e94560;
+      border-color: #d63851;
+      background: #d63851;
       color: #fff;
     }
 
@@ -112,7 +123,7 @@
       padding: 16px;
       border: none;
       border-radius: 10px;
-      background: linear-gradient(135deg, #e94560, #c23152);
+      background: linear-gradient(135deg, #d63851, #b52842);
       color: #fff;
       font-size: 1.1rem;
       font-weight: 700;
@@ -254,7 +265,7 @@
     footer {
       text-align: center;
       margin-top: 60px;
-      color: #495670;
+      color: #7b8da8;
       font-size: 0.85rem;
     }
 
@@ -289,11 +300,11 @@
 <body>
   <div class="container">
     <header>
-      <img src="/logo.png" alt="youtubemp3.sbs" class="logo-img">
+      <img src="/logo-280.webp" srcset="/logo-280.webp 280w, /logo.webp 560w" sizes="280px" alt="youtubemp3.sbs" class="logo-img" width="280" height="187" fetchpriority="high">
       <p class="subtitle">Convert and download YouTube videos as MP3 or MP4</p>
     </header>
 
-    <div class="converter-box">
+    <main class="converter-box">
       <div class="input-group">
         <input type="text" class="url-input" id="urlInput"
           placeholder="Paste YouTube link here...">
@@ -329,7 +340,7 @@
       </button>
 
       <div class="error-msg" id="errorMsg"></div>
-    </div>
+    </main>
 
     <footer>
       <p>No ads. No signup. Completely free.</p>

@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Admin Panel – youtubemp3.sbs</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+    .header { background: #1e293b; padding: 16px 24px; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; }
+    .header h1 { font-size: 1.2rem; color: #f8fafc; }
+    .header .status { font-size: 0.8rem; color: #22c55e; }
+    .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-bottom: 20px; }
+    .card { background: #1e293b; border-radius: 12px; padding: 20px; border: 1px solid #334155; }
+    .card h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px; color: #94a3b8; margin-bottom: 12px; }
+    .card .big-num { font-size: 2rem; font-weight: 700; color: #f8fafc; }
+    .card .label { font-size: 0.75rem; color: #64748b; margin-top: 4px; }
+    .progress-bar { height: 8px; background: #334155; border-radius: 4px; margin-top: 8px; overflow: hidden; }
+    .progress-bar .fill { height: 100%; border-radius: 4px; transition: width 0.5s; }
+    .fill-red { background: #ef4444; }
+    .fill-green { background: #22c55e; }
+    .fill-yellow { background: #eab308; }
+    .fill-blue { background: #3b82f6; }
+    .table-container { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th { text-align: left; padding: 10px 12px; background: #0f172a; color: #94a3b8; font-weight: 600; border-bottom: 1px solid #334155; }
+    td { padding: 10px 12px; border-bottom: 1px solid #1e293b; color: #cbd5e1; }
+    tr:hover td { background: #1e293b; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: 600; }
+    .badge-green { background: #166534; color: #86efac; }
+    .badge-red { background: #991b1b; color: #fca5a5; }
+    .badge-yellow { background: #854d0e; color: #fde047; }
+    .badge-blue { background: #1e40af; color: #93c5fd; }
+    .section-title { font-size: 1rem; font-weight: 600; color: #f8fafc; margin: 20px 0 12px; }
+    .cpu-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 8px; margin-top: 12px; }
+    .cpu-core { text-align: center; }
+    .cpu-core .usage { font-size: 1.1rem; font-weight: 600; }
+    .cpu-core .core-label { font-size: 0.65rem; color: #64748b; }
+    .net-iface { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #1e293b; font-size: 0.85rem; }
+    .refresh-btn { background: #3b82f6; color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
+    .refresh-btn:hover { background: #2563eb; }
+    @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Admin Panel</h1>
+    <div style="display:flex;align-items:center;gap:16px;">
+      <span class="status" id="statusDot">● Connected</span>
+      <button class="refresh-btn" onclick="loadStats()">Refresh</button>
+    </div>
+  </div>
+  <div class="container">
+    <div class="grid" id="overviewCards"></div>
+    <div class="grid">
+      <div class="card">
+        <h2>CPU Usage by Core</h2>
+        <div class="cpu-grid" id="cpuGrid"></div>
+      </div>
+      <div class="card">
+        <h2>Network Interfaces</h2>
+        <div id="netInfo"></div>
+      </div>
+      <div class="card">
+        <h2>Queue Health</h2>
+        <div id="queueHealth"></div>
+      </div>
+    </div>
+    <div class="section-title">Recent Jobs</div>
+    <div class="card table-container">
+      <table><thead><tr><th>Job ID</th><th>Format</th><th>Status</th><th>Duration</th><th>Time</th></tr></thead><tbody id="jobsTable"></tbody></table>
+    </div>
+    <div class="section-title">Visitors</div>
+    <div class="card table-container">
+      <table><thead><tr><th>IP</th><th>Visits</th><th>Session</th><th>User Agent</th><th>Last Seen</th></tr></thead><tbody id="visitorsTable"></tbody></table>
+    </div>
+  </div>
+  <script>
+    function formatBytes(b) { if (b===0) return '0 B'; const k=1024,s=['B','KB','MB','GB','TB'],i=Math.floor(Math.log(b)/Math.log(k)); return parseFloat((b/Math.pow(k,i)).toFixed(1))+' '+s[i]; }
+    function formatUptime(s) { const d=Math.floor(s/86400),h=Math.floor((s%86400)/3600),m=Math.floor((s%3600)/60); return d+'d '+h+'h '+m+'m'; }
+    function timeAgo(ts) { const d=Date.now()-ts; if(d<60000) return 'just now'; if(d<3600000) return Math.floor(d/60000)+'m ago'; if(d<86400000) return Math.floor(d/3600000)+'h ago'; return Math.floor(d/86400000)+'d ago'; }
+    function usageColor(p) { return p>80?'fill-red':p>60?'fill-yellow':'fill-green'; }
+
+    async function loadStats() {
+      try {
+        document.getElementById('statusDot').textContent = '● Connected';
+        document.getElementById('statusDot').style.color = '#22c55e';
+        const r = await fetch('/api/stats');
+        const d = await r.json();
+
+        document.getElementById('overviewCards').innerHTML = `
+          <div class="card"><h2>CPU Average</h2><div class="big-num">${d.system.cpu.avgUsage}%</div><div class="label">${d.system.cpu.model}</div>
+            <div class="progress-bar"><div class="fill ${usageColor(parseFloat(d.system.cpu.avgUsage))}" style="width:${d.system.cpu.avgUsage}%"></div></div></div>
+          <div class="card"><h2>Memory</h2><div class="big-num">${d.system.memory.usagePercent}%</div><div class="label">${formatBytes(d.system.memory.used)} / ${formatBytes(d.system.memory.total)}</div>
+            <div class="progress-bar"><div class="fill ${usageColor(parseFloat(d.system.memory.usagePercent))}" style="width:${d.system.memory.usagePercent}%"></div></div></div>
+          <div class="card"><h2>Load Average</h2><div class="big-num">${d.system.loadAvg[0]}</div><div class="label">1m: ${d.system.loadAvg[0]} | 5m: ${d.system.loadAvg[1]} | 15m: ${d.system.loadAvg[2]}</div></div>
+          <div class="card"><h2>Queue</h2><div class="big-num">${d.queue.counts.active} active</div><div class="label">Waiting: ${d.queue.counts.waiting} | Completed: ${d.queue.counts.completed} | Failed: ${d.queue.counts.failed}</div></div>
+          <div class="card"><h2>Disk</h2><div class="big-num">${formatBytes(d.system.disk.used)}</div><div class="label">${formatBytes(d.system.disk.free)} free of ${formatBytes(d.system.disk.total)}</div>
+            <div class="progress-bar"><div class="fill ${usageColor(d.system.disk.used/d.system.disk.total*100)}" style="width:${(d.system.disk.used/d.system.disk.total*100).toFixed(1)}%"></div></div></div>
+          <div class="card"><h2>Uptime</h2><div class="big-num">${formatUptime(d.system.uptime)}</div><div class="label">Server: ${d.system.hostname}</div></div>
+          <div class="card"><h2>Visitors</h2><div class="big-num">${d.visitors.total}</div><div class="label">Last 24h: ${d.visitors.last24h} | Last 1h: ${d.visitors.last1h}</div></div>
+        `;
+
+        document.getElementById('cpuGrid').innerHTML = d.system.cpu.usage.map((c,i) =>
+          `<div class="cpu-core"><div class="usage" style="color:${parseFloat(c.usagePercent)>80?'#ef4444':parseFloat(c.usagePercent)>60?'#eab308':'#22c55e'}">${c.usagePercent}%</div><div class="core-label">Core ${i}</div></div>`
+        ).join('');
+
+        document.getElementById('netInfo').innerHTML = d.network.interfaces.map(n =>
+          `<div class="net-iface"><span>${n.name}</span><span>↓ ${formatBytes(n.rxBytes)} ↑ ${formatBytes(n.txBytes)}</span></div>`
+        ).join('') || '<div style="color:#64748b">No network interfaces</div>';
+
+        document.getElementById('queueHealth').innerHTML = `
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div><span style="color:#22c55e">●</span> Completed: <strong>${d.queue.counts.completed}</strong></div>
+            <div><span style="color:#eab308">●</span> Waiting: <strong>${d.queue.counts.waiting}</strong></div>
+            <div><span style="color:#3b82f6">●</span> Active: <strong>${d.queue.counts.active}</strong></div>
+            <div><span style="color:#ef4444">●</span> Failed: <strong>${d.queue.counts.failed}</strong></div>
+            <div><span style="color:#a855f7">●</span> Delayed: <strong>${d.queue.counts.delayed}</strong></div>
+            <div><span style="color:#94a3b8">●</span> Total: <strong>${d.queue.counts.total}</strong></div>
+          </div>`;
+
+        document.getElementById('jobsTable').innerHTML = d.queue.jobHistory.map(j => `
+          <tr><td><code>${j.jobId?.slice(0,8)||j.id}</code></td>
+            <td><span class="badge badge-blue">${(j.format||'mp3').toUpperCase()}</span></td>
+            <td><span class="badge ${j.status==='completed'?'badge-green':'badge-red'}">${j.status}</span></td>
+            <td>${j.duration?(j.duration/1000).toFixed(1)+'s':'-'}</td>
+            <td>${timeAgo(j.timestamp)}</td></tr>
+        `).join('') || '<tr><td colspan="5" style="color:#64748b">No recent jobs</td></tr>';
+
+        document.getElementById('visitorsTable').innerHTML = d.visitors.list.slice().sort((a,b)=>b.lastSeen-a.lastSeen).map(v => `
+          <tr><td><code>${v.ip}</code></td><td>${v.visits}</td><td>${v.sessionDuration}m</td><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${v.userAgent}</td><td>${timeAgo(v.lastSeen)}</td></tr>
+        `).join('') || '<tr><td colspan="5" style="color:#64748b">No visitors yet</td></tr>';
+
+      } catch(e) {
+        document.getElementById('statusDot').textContent = '● Disconnected';
+        document.getElementById('statusDot').style.color = '#ef4444';
+        console.error('Stats fetch error:', e);
+      }
+    }
+
+    loadStats();
+    setInterval(loadStats, 5000);
+  </script>
+</body>
+</html>

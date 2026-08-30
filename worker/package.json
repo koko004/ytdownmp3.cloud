@@ -1,0 +1,12 @@
+{
+  "name": "youtube-converter-worker",
+  "version": "1.0.0",
+  "description": "Worker service for YouTube converter",
+  "main": "worker.js",
+  "scripts": {
+    "start": "node worker.js"
+  },
+  "dependencies": {
+    "bullmq": "^5.1.0"
+  }
+}

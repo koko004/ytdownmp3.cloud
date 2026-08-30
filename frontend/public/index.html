@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YouTube MP3 Converter – Free YouTube to MP3 Downloader Online</title>
+  <meta name="description" content="Convert YouTube videos to high-quality MP3 audio instantly. Free, fast, no ads, no signup required. Paste a YouTube link and download your MP3 in seconds.">
+  <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+  <link rel="canonical" href="https://youtubemp3.sbs/">
+  <meta name="keywords" content="youtube to mp3, youtube mp3 converter, youtube to mp3 converter, download youtube mp3, youtube mp3 download, convert youtube to mp3 free, youtube audio downloader, youtube to audio, mp3 converter, youtube music downloader">
+  <meta name="author" content="youtubemp3.sbs">
+  <meta name="theme-color" content="#1a1a2e">
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="YouTube MP3 Converter – Free YouTube to MP3 Downloader Online">
+  <meta property="og:description" content="Convert YouTube videos to high-quality MP3 audio instantly. Free, fast, no ads, no signup.">
+  <meta property="og:url" content="https://youtubemp3.sbs/">
+  <meta property="og:site_name" content="youtubemp3.sbs">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:image" content="https://youtubemp3.sbs/logo.webp">
+  <meta property="og:image:width" content="560">
+  <meta property="og:image:height" content="374">
+  <meta property="og:image:alt" content="youtubemp3.sbs logo">
+  <meta property="og:image:type" content="image/webp">
+
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="YouTube MP3 Converter – Free YouTube to MP3 Downloader Online">
+  <meta name="twitter:description" content="Convert YouTube videos to high-quality MP3 audio instantly. Free, fast, no ads, no signup.">
+  <meta name="twitter:image" content="https://youtubemp3.sbs/logo.webp">
+  <meta name="twitter:image:alt" content="youtubemp3.sbs logo">
+
+  <!-- Favicons -->
+  <link rel="icon" type="image/webp" href="/logo-280.webp">
+
+  <!-- Preconnect -->
+  <link rel="preconnect" href="https://static.cloudflareinsights.com">
+  <link rel="dns-prefetch" href="https://static.cloudflareinsights.com">
+
+  <!-- Structured Data -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": "YouTube MP3 Converter",
+    "url": "https://youtubemp3.sbs/",
+    "description": "Convert YouTube videos to high-quality MP3 audio instantly. Free, fast, no ads, no signup.",
+    "applicationCategory": "MultimediaApplication",
+    "operatingSystem": "Any",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    "featureList": [
+      "YouTube to MP3 conversion",
+      "High quality audio download",
+      "No registration required",
+      "No ads",
+      "Instant conversion"
+    ]
+  }
+  </script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #fff;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 700px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 50px;
+    }
+
+    .logo {
+      font-size: 2.5rem;
+      font-weight: 800;
+      background: linear-gradient(135deg, #e94560, #0f3460);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 8px;
+    }
+
+    .logo-img {
+      max-width: 280px;
+      height: auto;
+    }
+
+    .subtitle {
+      color: #8892b0;
+      font-size: 1.1rem;
+    }
+
+    .converter-box {
+      background: #16213e;
+      border-radius: 16px;
+      padding: 30px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+
+    .input-group {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    .url-input {
+      flex: 1;
+      padding: 14px 18px;
+      border: 2px solid #233554;
+      border-radius: 10px;
+      background: #0a192f;
+      color: #e6f1ff;
+      font-size: 1rem;
+      outline: none;
+      transition: border-color 0.3s;
+    }
+
+    .url-input:focus {
+      border-color: #e94560;
+    }
+
+    .url-input::placeholder {
+      color: #495670;
+    }
+
+    .format-selector {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    .format-btn {
+      flex: 1;
+      padding: 12px;
+      border: 2px solid #233554;
+      border-radius: 10px;
+      background: #0a192f;
+      color: #8892b0;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+
+    .format-btn.active {
+      border-color: #d63851;
+      background: #d63851;
+      color: #fff;
+    }
+
+    .format-btn:hover:not(.active) {
+      border-color: #495670;
+    }
+
+    .convert-btn {
+      width: 100%;
+      padding: 16px;
+      border: none;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #d63851, #b52842);
+      color: #fff;
+      font-size: 1.1rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .convert-btn:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 25px rgba(233, 69, 96, 0.4);
+    }
+
+    .convert-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .progress-container {
+      display: none;
+      margin-top: 25px;
+      text-align: center;
+    }
+
+    .progress-container.visible {
+      display: block;
+    }
+
+    .bubble-progress {
+      position: relative;
+      width: 180px;
+      height: 180px;
+      margin: 0 auto 16px;
+      border-radius: 50%;
+      border: 4px solid #e94560;
+      box-shadow: 0 0 25px rgba(233, 69, 96, 0.3), inset 0 0 25px rgba(233, 69, 96, 0.1);
+      overflow: hidden;
+      background: #0a192f;
+    }
+
+    .bubble-inner {
+      position: absolute;
+      top: 4px; left: 4px; right: 4px; bottom: 4px;
+      border-radius: 50%;
+      overflow: hidden;
+      background: #0a192f;
+    }
+
+    .bubble-water {
+      position: absolute;
+      width: 200%;
+      height: 200%;
+      left: -50%;
+      top: 75%;
+      border-radius: 40%;
+      background: rgba(233, 69, 96, 0.4);
+      box-shadow: 0 0 30px rgba(233, 69, 96, 0.5);
+      animation: liquidSpin 6s linear infinite;
+      transition: top 0.8s cubic-bezier(0.4, 0, 0.2, 1), background 0.5s ease, box-shadow 0.5s ease;
+    }
+
+    .bubble-water-back {
+      position: absolute;
+      width: 200%;
+      height: 200%;
+      left: -50%;
+      top: 78%;
+      border-radius: 35%;
+      background: rgba(233, 69, 96, 0.25);
+      animation: liquidSpin 8s linear infinite reverse;
+      transition: top 0.8s cubic-bezier(0.4, 0, 0.2, 1), background 0.5s ease;
+    }
+
+    .bubble-glare {
+      position: absolute;
+      top: -80%;
+      left: -80%;
+      width: 200%;
+      height: 200%;
+      transform: rotate(45deg);
+      border-radius: 50%;
+      background: linear-gradient(135deg, rgba(255,255,255,0.08) 0%, transparent 50%);
+      z-index: 5;
+      pointer-events: none;
+    }
+
+    .bubble-percent {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+      font-weight: 800;
+      color: #e94560;
+      text-shadow: 0 0 15px rgba(233, 69, 96, 0.5);
+      line-height: 1;
+      transition: color 0.5s ease, text-shadow 0.5s ease;
+    }
+
+    .bubble-number {
+      display: inline-flex;
+      align-items: baseline;
+    }
+
+    .bubble-number .pct-value {
+      font-size: 2.8rem;
+    }
+
+    .bubble-number .pct-sign {
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin-left: 1px;
+    }
+
+    .bubble-percent .status-label {
+      font-size: 0.6rem;
+      font-weight: 600;
+      color: #8892b0;
+      text-shadow: none;
+      margin-top: 6px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      transition: color 0.5s ease;
+    }
+
+    /* 0-95% Yellow */
+    .bubble-progress.yellow {
+      border-color: #eab308;
+      box-shadow: 0 0 25px rgba(234, 179, 8, 0.35), inset 0 0 25px rgba(234, 179, 8, 0.1);
+    }
+    .bubble-progress.yellow .bubble-water {
+      background: rgba(234, 179, 8, 0.45);
+      box-shadow: 0 0 30px rgba(234, 179, 8, 0.5);
+    }
+    .bubble-progress.yellow .bubble-water-back {
+      background: rgba(234, 179, 8, 0.3);
+    }
+    .bubble-progress.yellow .bubble-percent {
+      color: #eab308;
+      text-shadow: 0 0 15px rgba(234, 179, 8, 0.5);
+    }
+
+    /* 96-100% Green */
+    .bubble-progress.done {
+      border-color: #22c55e !important;
+      box-shadow: 0 0 35px rgba(34, 197, 94, 0.5), inset 0 0 35px rgba(34, 197, 94, 0.15) !important;
+    }
+    .bubble-progress.done .bubble-water {
+      background: rgba(34, 197, 94, 0.55) !important;
+      box-shadow: 0 0 40px rgba(34, 197, 94, 0.6) !important;
+      top: 0% !important;
+      animation-duration: 5s;
+    }
+    .bubble-progress.done .bubble-water-back {
+      background: rgba(34, 197, 94, 0.4) !important;
+      top: -5% !important;
+      animation-duration: 7s;
+    }
+    .bubble-progress.done .bubble-percent {
+      color: #22c55e !important;
+      text-shadow: 0 0 20px rgba(34, 197, 94, 0.6) !important;
+    }
+    .bubble-progress.done .bubble-percent .status-label {
+      color: #86efac !important;
+    }
+
+    .progress-text {
+      text-align: center;
+      color: #8892b0;
+      font-size: 0.85rem;
+    }
+
+    @keyframes liquidSpin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    .download-btn {
+      display: none;
+      width: 100%;
+      padding: 14px;
+      border: none;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #22c55e, #16a34a);
+      color: #fff;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      margin-top: 20px;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .download-btn.visible {
+      display: block;
+    }
+
+    .download-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 25px rgba(34, 197, 94, 0.4);
+    }
+
+    .error-msg {
+      display: none;
+      margin-top: 15px;
+      padding: 12px 16px;
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid #ef4444;
+      border-radius: 8px;
+      color: #ef4444;
+      font-size: 0.9rem;
+      text-align: center;
+    }
+
+    .error-msg.visible {
+      display: block;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 3px solid rgba(255,255,255,0.3);
+      border-radius: 50%;
+      border-top-color: #fff;
+      animation: spin 0.8s linear infinite;
+      vertical-align: middle;
+      margin-right: 8px;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    footer {
+      text-align: center;
+      margin-top: 60px;
+      color: #7b8da8;
+      font-size: 0.85rem;
+    }
+
+    footer a {
+      color: #e94560;
+      text-decoration: none;
+    }
+
+    .paste-btn {
+      padding: 14px 16px;
+      border: 2px solid #233554;
+      border-radius: 10px;
+      background: #0a192f;
+      color: #8892b0;
+      cursor: pointer;
+      font-size: 1rem;
+      transition: all 0.3s;
+    }
+
+    .paste-btn:hover {
+      border-color: #e94560;
+      color: #e94560;
+    }
+
+    @media (max-width: 600px) {
+      .input-group { flex-direction: column; }
+      .video-thumb { width: 100%; height: auto; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <img src="/logo-280.webp" srcset="/logo-280.webp 280w, /logo.webp 560w" sizes="280px" alt="youtubemp3.sbs" class="logo-img" width="280" height="187" fetchpriority="high">
+      <p class="subtitle">Convert and download YouTube videos as MP3</p>
+    </header>
+
+    <main class="converter-box">
+      <div class="input-group">
+        <input type="text" class="url-input" id="urlInput"
+          placeholder="Paste YouTube link here...">
+        <button class="paste-btn" onclick="pasteFromClipboard()" title="Paste">&#128203;</button>
+      </div>
+
+      <div class="format-selector">
+        <button class="format-btn active" data-format="mp3" onclick="selectFormat('mp3')">MP3 (Audio)</button>
+        <!-- MP4 BUTTON - Uncomment to re-enable
+        <button class="format-btn" data-format="mp4" onclick="selectFormat('mp4')">MP4 (Video)</button>
+        -->
+      </div>
+
+      <button class="convert-btn" id="convertBtn" onclick="startConvert()">
+        Convert
+      </button>
+
+      <div class="progress-container" id="progressContainer">
+        <div class="bubble-progress" id="bubbleProgress">
+          <div class="bubble-inner">
+            <div class="bubble-water" id="bubbleWater"></div>
+            <div class="bubble-water-back"></div>
+            <div class="bubble-glare"></div>
+          </div>
+          <div class="bubble-percent">
+            <div class="bubble-number">
+              <span class="pct-value" id="pctNumber">0</span><span class="pct-sign">%</span>
+            </div>
+            <span class="status-label" id="statusLabel">queued</span>
+          </div>
+        </div>
+        <p class="progress-text" id="progressText">Queued...</p>
+      </div>
+
+      <button class="download-btn" id="downloadBtn" onclick="downloadFile()">
+        Download
+      </button>
+
+      <div class="error-msg" id="errorMsg"></div>
+    </main>
+
+    <footer>
+      <p>No ads. No signup. Completely free.</p>
+    </footer>
+  </div>
+
+  <script>
+    const API_BASE = '/api';
+    let selectedFormat = 'mp3';
+    let currentJobId = null;
+    let pollTimer = null;
+
+    function selectFormat(fmt) {
+      selectedFormat = fmt;
+      document.querySelectorAll('.format-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.format === fmt);
+      });
+    }
+
+    async function pasteFromClipboard() {
+      try {
+        const text = await navigator.clipboard.readText();
+        document.getElementById('urlInput').value = text;
+      } catch (e) {}
+    }
+
+    function showError(msg) {
+      const el = document.getElementById('errorMsg');
+      el.textContent = msg;
+      el.classList.add('visible');
+      setTimeout(() => el.classList.remove('visible'), 8000);
+    }
+
+    function resetUI() {
+      document.getElementById('progressContainer').classList.remove('visible');
+      document.getElementById('downloadBtn').classList.remove('visible');
+      document.getElementById('errorMsg').classList.remove('visible');
+      updateBubble(0, 'queued');
+      if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+    }
+
+    function updateBubble(pct, label) {
+      const waterTop = 100 - Math.min(pct, 100);
+      document.getElementById('bubbleWater').style.top = waterTop + '%';
+      document.querySelectorAll('.bubble-water-back').forEach(el => el.style.top = (waterTop + 3) + '%');
+      document.getElementById('pctNumber').textContent = Math.round(pct);
+      document.getElementById('statusLabel').textContent = label;
+
+      const bp = document.getElementById('bubbleProgress');
+      bp.classList.remove('yellow', 'done');
+      if (pct >= 96) {
+        bp.classList.add('done');
+      } else {
+        bp.classList.add('yellow');
+      }
+    }
+
+    async function startConvert() {
+      const url = document.getElementById('urlInput').value.trim();
+      if (!url) return showError('Please enter a YouTube link');
+      if (!/youtu(\.be|be\.com)/.test(url)) return showError('The link does not appear to be from YouTube');
+
+      const btn = document.getElementById('convertBtn');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span> Submitting...';
+      resetUI();
+
+      try {
+        const res = await fetch(`${API_BASE}/convert`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url, format: selectedFormat })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+
+        currentJobId = data.jobId;
+        document.getElementById('progressContainer').classList.add('visible');
+        document.getElementById('progressText').textContent = 'Job queued. Waiting for worker...';
+        pollStatus();
+      } catch (e) {
+        showError(e.message || 'Error submitting conversion');
+        btn.disabled = false;
+        btn.textContent = 'Convert';
+      }
+    }
+
+    async function pollStatus() {
+      if (!currentJobId) return;
+      try {
+        const res = await fetch(`${API_BASE}/status/${currentJobId}`);
+        const data = await res.json();
+
+        const text = document.getElementById('progressText');
+        const btn = document.getElementById('convertBtn');
+
+        if (data.status === 'queued') {
+          updateBubble(2, 'queued');
+          text.textContent = 'Job queued. Waiting for worker...';
+          pollTimer = setTimeout(pollStatus, 2000);
+        } else if (data.status === 'processing') {
+          const pct = Math.max(data.progress || 0, 5);
+          updateBubble(pct, 'converting');
+          text.textContent = `Converting... ${Math.round(pct)}%`;
+          pollTimer = setTimeout(pollStatus, 1500);
+        } else if (data.status === 'completed') {
+          updateBubble(100, 'done');
+          text.textContent = 'Conversion complete!';
+          document.getElementById('downloadBtn').classList.add('visible');
+          document.getElementById('downloadBtn').dataset.url = `${API_BASE}${data.downloadUrl}`;
+          btn.disabled = false;
+          btn.textContent = 'Convert';
+        } else {
+          showError(data.error || 'Conversion failed');
+          btn.disabled = false;
+          btn.textContent = 'Convert';
+        }
+      } catch (e) {
+        pollTimer = setTimeout(pollStatus, 2000);
+      }
+    }
+
+    function downloadFile() {
+      const url = document.getElementById('downloadBtn').dataset.url;
+      if (url) window.location.href = url;
+    }
+
+    document.getElementById('urlInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') startConvert();
+    });
+  </script>
+</body>
+</html>
