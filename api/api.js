@@ -3,6 +3,7 @@ const { Queue } = require('bullmq');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const fs = require('fs');
+const Redis = require('ioredis');
 
 const app = express();
 app.use(express.json());
@@ -19,6 +20,8 @@ const conversionQueue = new Queue('conversions', {
     removeOnFail: { age: 86400 },
   },
 });
+
+const redisClient = new Redis({ host: REDIS_HOST, port: REDIS_PORT, maxRetriesPerRequest: 1 });
 
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -165,6 +168,15 @@ app.get('/download/:jobId', async (req, res) => {
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'api' });
+});
+
+app.get('/public/progress-bar', async (req, res) => {
+  try {
+    const type = await redisClient.get('config:progressBarType') || 'bubble';
+    res.json({ type });
+  } catch (e) {
+    res.json({ type: 'bubble' });
+  }
 });
 
 app.listen(PORT, () => {

@@ -16,9 +16,7 @@ services:
       retries: 3
 
   api:
-    build:
-      context: ./api
-      dockerfile: Dockerfile
+    image: koko004/ytdownmp3-api:latest
     restart: unless-stopped
     ports:
       - "8080:3000"
@@ -33,9 +31,7 @@ services:
         condition: service_healthy
 
   worker:
-    build:
-      context: ./worker
-      dockerfile: Dockerfile.worker
+    image: koko004/ytdownmp3-worker:latest
     restart: unless-stopped
     environment:
       - REDIS_HOST=redis
@@ -50,9 +46,7 @@ services:
         condition: service_healthy
 
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
+    image: koko004/ytdownmp3-frontend:latest
     restart: unless-stopped
     ports:
       - "3000:80"
@@ -60,15 +54,15 @@ services:
       - api
 
   admin:
-    build:
-      context: ./admin
-      dockerfile: Dockerfile
+    image: koko004/ytdownmp3-admin:latest
     restart: unless-stopped
     ports:
       - "4000:4000"
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - ADMIN_USER=admin
+      - ADMIN_PASS=changeme123
     depends_on:
       redis:
         condition: service_healthy

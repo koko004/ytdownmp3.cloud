@@ -1,13 +1,16 @@
 {
   "name": "youtubemp3-admin",
   "version": "1.0.0",
-  "description": "Admin panel for youtubemp3.sbs",
+  "description": "Admin panel for ytdownmp3.cloud",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "bullmq": "^5.0.0"
+    "bullmq": "^5.0.0",
+    "express-session": "^1.17.3",
+    "geoip-lite": "^1.4.7",
+    "ioredis": "^5.3.2"
   }
 }
