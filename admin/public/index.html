@@ -7,6 +7,7 @@
   <title>Admin Panel – ytdownmp3.cloud</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.min.js"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -91,6 +92,7 @@
       <button class="tab" onclick="showTab('visitors')">Visitors</button>
       <button class="tab" onclick="showTab('jobs')">Jobs</button>
       <button class="tab" onclick="showTab('system')">System</button>
+      <button class="tab" onclick="showTab('proxies')">Proxies</button>
       <button class="tab" onclick="showTab('settings')">Settings</button>
     </div>
 
@@ -108,6 +110,20 @@
         <div class="card">
           <h2>Queue Health</h2>
           <div id="queueHealth"></div>
+        </div>
+      </div>
+      <div class="grid">
+        <div class="card">
+          <h2>Machine IPs</h2>
+          <div class="ip-list" id="ipList"></div>
+        </div>
+        <div class="card">
+          <h2>Service Status</h2>
+          <div class="services-grid" id="servicesGrid"></div>
+        </div>
+        <div class="card">
+          <h2>System Info</h2>
+          <div id="sysInfo"></div>
         </div>
       </div>
     </div>
@@ -166,15 +182,15 @@
       <div class="grid">
         <div class="card">
           <h2>Machine IPs</h2>
-          <div class="ip-list" id="ipList"></div>
+          <div class="ip-list" id="sysIpList"></div>
         </div>
         <div class="card">
           <h2>Service Status</h2>
-          <div class="services-grid" id="servicesGrid"></div>
+          <div class="services-grid" id="sysServicesGrid"></div>
         </div>
         <div class="card">
           <h2>System Info</h2>
-          <div id="sysInfo"></div>
+          <div id="sysInfoDetail"></div>
         </div>
       </div>
     </div>
@@ -198,23 +214,112 @@
         </div>
         <button class="refresh-btn" onclick="saveProgressBarSetting()" style="max-width:200px;">Save Setting</button>
       </div>
+      
+      <div class="card" style="margin-top: 20px;">
+        <h2>Logo Management</h2>
+        <div style="display: flex; gap: 24px; align-items: center; flex-wrap: wrap; margin-bottom: 16px;">
+          <div>
+            <label style="display:block; font-size:0.85rem; font-weight:600; color:#94a3b8; margin-bottom:8px;">Current Logo</label>
+            <div style="width: 180px; height: 180px; border-radius: 8px; overflow: hidden; border: 2px solid #334155;">
+              <img id="currentAdminLogo" src="/logo-280.webp" alt="Current Logo" style="width:100%; height:100%; object-fit:cover;">
+            </div>
+          </div>
+          <div>
+            <label style="display:block; font-size:0.85rem; font-weight:600; color:#94a3b8; margin-bottom:8px;">Upload New Logo (PNG)</label>
+            <input type="file" id="logoUpload" accept="image/png" style="display: none;">
+            <button class="refresh-btn" onclick="document.getElementById('logoUpload').click()">Select PNG</button>
+            <p style="margin-top:8px; font-size:0.75rem; color:#64748b;">Upload a PNG image. It will be converted to WebP (560x560 & 280x280) automatically.</p>
+          </div>
+        </div>
+        <button class="refresh-btn" onclick="uploadLogo()" style="background: #22c55e;">Upload & Convert</button>
+        <div id="logoUploadStatus" style="margin-top:12px; font-size:0.8rem;"></div>
+      </div>
+      
+      <div class="card" style="margin-top: 20px;">
+        <h2>Version Info</h2>
+        <div style="display: flex; gap: 24px; align-items: center; flex-wrap: wrap;">
+          <div>
+            <label style="display:block; font-size:0.85rem; font-weight:600; color:#94a3b8; margin-bottom:4px;">Current Version</label>
+            <span id="versionDisplay" style="font-size:1.2rem; font-weight:600; color:#3b82f6; background:#0f172a; padding:8px 16px; border-radius:6px; border:1px solid #334155;">Loading...</span>
+          </div>
+          <button class="refresh-btn" onclick="loadVersion()">Refresh Version</button>
+        </div>
+      </div>
     </div>
-  </div>
+    <div class="tab-panel" id="panel-proxies">
+      <div class="card">
+        <h2>SOCKS5 Proxy Management</h2>
+        <div style="margin-bottom: 20px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center;">
+          <button class="refresh-btn" onclick="showAddProxyModal()">Add Proxy</button>
+          <button class="refresh-btn" onclick="testAllProxies()">Test All</button>
+          <button class="refresh-btn" onclick="importProxies()">Import</button>
+        </div>
+        <div class="table-container">
+          <table><thead><tr><th>Name</th><th>URL</th><th>Country</th><th>Status</th><th>Latency</th><th>Success Rate</th><th>Last Tested</th><th>Actions</th></tr></thead><tbody id="proxiesTable"></tbody></table>
+        </div>
+      </div>
+      
+      <div class="card" style="margin-top: 20px;">
+        <h2>Rotation Settings</h2>
+        <div style="display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin-bottom: 12px;">
+          <label style="font-size:0.85rem; font-weight:600; color:#94a3b8;">Strategy:</label>
+          <select id="rotationStrategy" style="padding: 8px 12px; border: 2px solid #334155; border-radius: 6px; background: #0f172a; color: #fff;" onchange="saveRotationStrategy()">
+            <option value="round_robin">Round Robin</option>
+            <option value="random">Random</option>
+            <option value="least_used">Least Used</option>
+            <option value="sticky">Sticky</option>
+          </select>
+          <button class="refresh-btn" onclick="testNextProxy()">Get Next Proxy</button>
+          <span id="nextProxyInfo" style="font-size: 0.85rem; color: #94a3b8;"></span>
+        </div>
+      </div>
+      
+      <!-- Add Proxy Modal -->
+      <div id="addProxyModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; display: flex; align-items: center; justify-content: center;">
+        <div style="background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 24px; width: 100%; max-width: 500px;">
+          <h3 style="margin-bottom: 16px;">Add New Proxy</h3>
+          <div style="margin-bottom: 12px;">
+            <label style="display:block; font-size:0.8rem; font-weight:600; color:#94a3b8; margin-bottom:4px;">Name</label>
+            <input type="text" id="modalProxyName" placeholder="My Proxy" style="width:100%; padding:10px 12px; border:2px solid #334155; border-radius:6px; background:#0f172a; color:#fff;">
+          </div>
+          <div style="margin-bottom: 12px;">
+            <label style="display:block; font-size:0.8rem; font-weight:600; color:#94a3b8; margin-bottom:4px;">URL (socks5://...)</label>
+            <input type="text" id="modalProxyUrl" placeholder="socks5://192.168.1.1:1080" style="width:100%; padding:10px 12px; border:2px solid #334155; border-radius:6px; background:#0f172a; color:#fff;">
+          </div>
+          <div style="margin-bottom: 12px;">
+            <label style="display:block; font-size:0.8rem; font-weight:600; color:#94a3b8; margin-bottom:4px;">Country</label>
+            <input type="text" id="modalProxyCountry" placeholder="US" style="width:100%; padding:10px 12px; border:2px solid #334155; border-radius:6px; background:#0f172a; color:#fff;">
+          </div>
+          <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px;">
+            <button class="refresh-btn" onclick="closeAddProxyModal()">Cancel</button>
+            <button class="refresh-btn" onclick="saveProxy()" style="background: #22c55e;">Save</button>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Import Modal -->
+      <div id="importModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; display: flex; align-items: center; justify-content: center;">
+        <div style="background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 24px; width: 100%; max-width: 600px;">
+          <h3 style="margin-bottom: 16px;">Import Proxies (JSON Array)</h3>
+          <textarea id="importProxiesText" style="width:100%; height:200px; padding:12px; border:2px solid #334155; border-radius:6px; background:#0f172a; color:#fff; font-family:monospace; font-size:0.8rem;" placeholder='[{"url":"socks5://1.2.3.4:1080","name":"Proxy 1","country":"US","enabled":true}, ...]'></textarea>
+          <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px;">
+            <button class="refresh-btn" onclick="closeImportModal()">Cancel</button>
+            <button class="refresh-btn" onclick="saveImportProxies()" style="background: #22c55e;">Import</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
+
   <script>
     const colors = { red: '#ef4444', green: '#22c55e', yellow: '#eab308', blue: '#3b82f6', gray: '#64748b' };
     let charts = {};
+    let lastData = null;
 
     function formatBytes(b) { if (b===0) return '0 B'; const k=1024,s=['B','KB','MB','GB','TB'],i=Math.floor(Math.log(b)/Math.log(k)); return parseFloat((b/Math.pow(k,i)).toFixed(1))+' '+s[i]; }
     function formatUptime(s) { const d=Math.floor(s/86400),h=Math.floor((s%86400)/3600),m=Math.floor((s%3600)/60); return d+'d '+h+'h '+m+'m'; }
     function timeAgo(ts) { const d=Date.now()-ts; if(d<60000) return 'just now'; if(d<3600000) return Math.floor(d/60000)+'m ago'; if(d<86400000) return Math.floor(d/3600000)+'h ago'; return Math.floor(d/86400000)+'d ago'; }
     function usageColor(p) { return p>80?'fill-red':p>60?'fill-yellow':'fill-green'; }
-
-    function showTab(name) {
-      document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab===name || t.textContent.toLowerCase()===name));
-      document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id==='panel-'+name));
-      if (name==='charts' && Object.keys(charts).length===0) setTimeout(initCharts, 100);
-      if (name==='map' && !window.mapInitialized) setTimeout(initMap, 100);
-    }
 
     async function loadStats() {
       try {
@@ -223,6 +328,7 @@
         const r = await fetch('/api/stats');
         if (r.status === 401) return window.location.href = '/login';
         const d = await r.json();
+        lastData = d;
         renderOverview(d);
         renderCharts(d);
         renderMap(d);
@@ -267,41 +373,8 @@
           <div><span style="color:#a855f7">●</span> Delayed: <strong>${d.queue.counts.delayed}</strong></div>
           <div><span style="color:#94a3b8">●</span> Total: <strong>${d.queue.counts.total}</strong></div>
         </div>`;
-    }
 
-    function renderVisitors(d) {
-      document.getElementById('visitorsTable').innerHTML = d.visitors.list.slice().sort((a,b)=>b.lastSeen-a.lastSeen).map(v => `
-        <tr>
-          <td><code>${v.ip}</code></td>
-          <td><span class="flag" style="background-image:url('https://flagcdn.com/20x15/${v.country?.toLowerCase()}.png')">${v.country||'Unknown'}</span></td>
-          <td>${v.city||'-'}</td>
-          <td>${v.visits}</td>
-          <td>${v.sessionDuration}m</td>
-          <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${v.userAgent}</td>
-          <td>${timeAgo(v.lastSeen)}</td>
-        </tr>
-      `).join('') || '<tr><td colspan="7" style="color:#64748b">No visitors</td></tr>';
-
-      document.querySelectorAll('.flag').forEach(el => {
-        const c = el.textContent.trim().toLowerCase();
-        if (c && c !== 'unknown') el.style.backgroundImage = `url('https://flagcdn.com/20x15/${c}.png')`;
-        else el.style.display = 'none';
-      });
-    }
-
-    function renderJobs(d) {
-      document.getElementById('jobsTable').innerHTML = d.queue.jobHistory.map(j => `
-        <tr>
-          <td><code>${j.jobId?.slice(0,8)||j.id}</code></td>
-          <td><span class="badge badge-blue">${(j.format||'mp3').toUpperCase()}</span></td>
-          <td><span class="badge ${j.status==='completed'?'badge-green':j.status==='active'?'badge-blue':j.status==='waiting'?'badge-yellow':'badge-red'}">${j.status}</span></td>
-          <td>${j.duration?(j.duration/1000).toFixed(1)+'s':'-'}</td>
-          <td>${timeAgo(j.timestamp)}</td>
-        </tr>
-      `).join('') || '<tr><td colspan="5" style="color:#64748b">No recent jobs</td></tr>';
-    }
-
-    function renderSystem(d) {
+      // Render System cards in Overview
       document.getElementById('ipList').innerHTML = d.machineIPs.map(ip =>
         `<span class="ip-badge">${ip.ip} <span class="iface">(${ip.interface})</span></span>`
       ).join('') || '<div style="color:#64748b">No external IPs</div>';
@@ -326,32 +399,108 @@
       `;
     }
 
-    function initCharts() {
+    function renderVisitors(d) {
+      document.getElementById('visitorsTable').innerHTML = d.visitors.list.slice().sort((a,b)=>b.lastSeen-a.lastSeen).map(v => `
+        <tr>
+          <td><code>${v.ip}</code></td>
+          <td><span class="flag" style="background-image:url('https://flagcdn.com/20x15/${v.country?.toLowerCase()}.png')">${v.country||'Unknown'}</span></td>
+          <td>${v.city||'-'}</td>
+          <td>${v.visits}</td>
+          <td>${v.sessionDuration}m</td>
+          <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${v.userAgent}</td>
+          <td>${timeAgo(v.lastSeen)}</td>
+        </tr>
+      `).join('') || '<tr><td colspan="7" style="color:#64748b">No visitors</td></tr>';
+
+      document.querySelectorAll('.flag').forEach(el => {
+        const c = el.textContent.trim().toLowerCase();
+        if (c && c !== 'unknown') el.style.backgroundImage = `url('https://flagcdn.com/20x15/${c}.png')`;
+        else el.style.display = 'none';
+      });
+    }
+
+    function renderJobs(d) {
+      document.getElementById('jobsTable').innerHTML = d.queue.jobHistory.map(j => {
+        const status = j.status || 'unknown';
+        const statusClass = status === 'completed' ? 'badge-green' : 
+                           status === 'active' ? 'badge-blue' : 
+                           status === 'waiting' ? 'badge-yellow' : 
+                           status === 'failed' ? 'badge-red' : 
+                           status === 'delayed' ? 'badge-purple' : 'badge-gray';
+        return `
+          <tr>
+            <td><code>${j.jobId?.slice(0,8)||j.id}</code></td>
+            <td><span class="badge badge-blue">${(j.format||'mp3').toUpperCase()}</span></td>
+            <td><span class="badge ${statusClass}">${status}</span></td>
+            <td>${j.duration?(j.duration/1000).toFixed(1)+'s':'-'}</td>
+            <td>${timeAgo(j.timestamp)}</td>
+          </tr>
+        `;
+      }).join('') || '<tr><td colspan="5" style="color:#64748b">No recent jobs</td></tr>';
+    }
+
+    function renderSystem(d) {
+      document.getElementById('sysIpList').innerHTML = d.machineIPs.map(ip =>
+        `<span class="ip-badge">${ip.ip} <span class="iface">(${ip.interface})</span></span>`
+      ).join('') || '<div style="color:#64748b">No external IPs</div>';
+
+      document.getElementById('sysServicesGrid').innerHTML = d.services.map(s => `
+        <div class="service-item">
+          <div class="service-dot ${s.status}"></div>
+          <div>
+            <div class="service-name">${s.name}</div>
+            <div class="service-detail">${s.detail}</div>
+          </div>
+        </div>
+      `).join('');
+
+      document.getElementById('sysInfoDetail').innerHTML = `
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;">
+          <div><strong>Hostname:</strong> ${d.system.hostname}</div>
+          <div><strong>Platform:</strong> ${d.system.platform} (${d.system.arch})</div>
+          <div><strong>CPU:</strong> ${d.system.cpu.cores} cores</div>
+          <div><strong>Uptime:</strong> ${formatUptime(d.system.uptime)}</div>
+        </div>
+      `;
+    }
+
+    function destroyCharts() {
+      Object.values(charts).forEach(c => { if (c && typeof c.destroy === 'function') c.destroy(); });
+      charts = {};
+    }
+
+    function initCharts(d) {
+      destroyCharts();
       const opts = {
         responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false } },
-        scales: { x: { type: 'time', time: { unit: 'minute', displayFormats: { minute: 'HH:mm' } }, grid: { color: '#334155' }, ticks: { color: '#94a3b8' } }, y: { beginAtZero: true, max: 100, grid: { color: '#334155' }, ticks: { color: '#94a3b8' } } }
+        scales: { x: { type: 'linear', grid: { color: '#334155' }, ticks: { color: '#94a3b8' } }, y: { beginAtZero: true, max: 100, grid: { color: '#334155' }, ticks: { color: '#94a3b8' } } }
       };
 
       const createChart = (id, label, color, data) => {
         const ctx = document.getElementById(id).getContext('2d');
-        return new Chart(ctx, { type: 'line', data: { datasets: [{ label, data, borderColor: color, backgroundColor: color + '33', tension: 0.3, fill: true, pointRadius: 0 }] }, options: opts });
+        if (charts[id]) charts[id].destroy();
+        return new Chart(ctx, { type: 'line', data: { datasets: [{ label, data: data.map((v,i)=>({x:i,y:v})), borderColor: color, backgroundColor: color + '33', tension: 0.3, fill: true, pointRadius: 0 }] }, options: opts });
       };
 
       charts.cpu = createChart('cpuChart', 'CPU %', colors.blue, d.history.cpu);
       charts.mem = createChart('memChart', 'Memory %', colors.green, d.history.memory);
-      charts.net = new Chart(document.getElementById('netChart').getContext('2d'), {
-        type: 'line', data: { datasets: [
-          { label: 'RX', data: d.history.network.map(p=>({x:p.time,y:p.rx})), borderColor: colors.green, backgroundColor: colors.green+'33', tension: 0.3, fill: true, pointRadius: 0 },
-          { label: 'TX', data: d.history.network.map(p=>({x:p.time,y:p.tx})), borderColor: colors.red, backgroundColor: colors.red+'33', tension: 0.3, fill: true, pointRadius: 0 }
-        ]}, options: opts });
+      charts.net = (() => {
+        const ctx = document.getElementById('netChart').getContext('2d');
+        if (charts.net) charts.net.destroy();
+        return new Chart(ctx, {
+          type: 'line', data: { datasets: [
+            { label: 'RX', data: d.history.network.map((p,i)=>({x:i,y:p.rx})), borderColor: colors.green, backgroundColor: colors.green+'33', tension: 0.3, fill: true, pointRadius: 0 },
+            { label: 'TX', data: d.history.network.map((p,i)=>({x:i,y:p.tx})), borderColor: colors.red, backgroundColor: colors.red+'33', tension: 0.3, fill: true, pointRadius: 0 }
+          ]}, options: { ...opts, scales: { ...opts.scales, y: { beginAtZero: true, grid: { color: '#334155' }, ticks: { color: '#94a3b8' } } } } });
+      })();
       charts.queue = createChart('queueChart', 'Active Jobs', colors.yellow, d.history.queue);
       charts.visitors = createChart('visitorsChart', 'Visitors', colors.blue, d.history.visitors);
       charts.disk = createChart('diskChart', 'Disk %', colors.gray, d.history.disk);
     }
 
     function renderCharts(d) {
-      if (Object.keys(charts).length === 0) return initCharts();
+      if (Object.keys(charts).length === 0) return initCharts(d);
       charts.cpu.data.datasets[0].data = d.history.cpu;
       charts.mem.data.datasets[0].data = d.history.memory;
       charts.net.data.datasets[0].data = d.history.network.map(p=>({x:p.time,y:p.rx}));
@@ -422,8 +571,334 @@
       }
     }
 
+    // ========== PROXY MANAGEMENT ==========
+    let proxiesData = null;
+
+    async function loadProxies() {
+      try {
+        const r = await fetch('/api/proxies');
+        const d = await r.json();
+        proxiesData = d;
+        renderProxies(d.proxies, d.stats);
+        renderRotation(d.rotation);
+      } catch (e) {
+        console.error('Failed to load proxies:', e);
+      }
+    }
+
+    function renderProxies(proxies, stats) {
+      const tbody = document.getElementById('proxiesTable');
+      if (!proxies || proxies.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" style="color:#64748b;text-align:center;">No proxies configured. Click "Add Proxy" to get started.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = proxies.map(p => {
+        const s = stats[p.id] || { successRate: 0, avgLatency: 0, total: 0, success: 0, failed: 0 };
+        const statusClass = p.enabled ? 'running' : 'stopped';
+        const statusText = p.enabled ? 'Enabled' : 'Disabled';
+        return `
+          <tr>
+            <td><strong>${p.name}</strong></td>
+            <td style="font-family:monospace;font-size:0.75rem;">${p.url}</td>
+            <td>${p.country}</td>
+            <td><span class="service-dot ${statusClass}"></span> ${statusText}</td>
+            <td>${p.latency ? p.latency + 'ms' : '-'}</td>
+            <td>${s.total > 0 ? s.successRate + '%' : '-'}</td>
+            <td>${p.lastTested ? timeAgo(p.lastTested) : 'Never'}</td>
+            <td>
+              <button class="refresh-btn" onclick="testProxy('${p.id}')" style="padding:4px 8px;font-size:0.7rem;">Test</button>
+              <button class="refresh-btn" onclick="toggleProxy('${p.id}', ${!p.enabled})" style="padding:4px 8px;font-size:0.7rem;background:${p.enabled ? '#ef4444' : '#22c55e'};">${p.enabled ? 'Disable' : 'Enable'}</button>
+              <button class="refresh-btn" onclick="deleteProxy('${p.id}')" style="padding:4px 8px;font-size:0.7rem;background:#ef4444;">Delete</button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function renderRotation(rotation) {
+      document.getElementById('rotationStrategy').value = rotation.strategy || 'round_robin';
+    }
+
+    async function testProxy(id) {
+      const btn = event.target;
+      btn.disabled = true;
+      btn.textContent = 'Testing...';
+      try {
+        const r = await fetch(`/api/proxies/${id}/test`, { method: 'POST' });
+        const d = await r.json();
+        alert(`Test ${d.success ? 'passed' : 'failed'}: ${d.error || 'OK'} (${d.latency}ms)`);
+        loadProxies();
+      } catch (e) {
+        alert('Test failed: ' + e.message);
+      }
+      btn.disabled = false;
+      btn.textContent = 'Test';
+    }
+
+    async function testAllProxies() {
+      const btn = event.target;
+      btn.disabled = true;
+      btn.textContent = 'Testing...';
+      try {
+        const r = await fetch('/api/proxies/test-all', { method: 'POST' });
+        const d = await r.json();
+        alert(`Tested ${d.results.length} proxies. ${d.results.filter(r => r.success).length} passed.`);
+        loadProxies();
+      } catch (e) {
+        alert('Test failed: ' + e.message);
+      }
+      btn.disabled = false;
+      btn.textContent = 'Test All';
+    }
+
+    async function testNextProxy() {
+      try {
+        const r = await fetch('/api/proxies/next');
+        const d = await r.json();
+        document.getElementById('nextProxyInfo').textContent = d.proxy ? `Next: ${d.proxy.name} (${d.proxy.url})` : 'No proxies available';
+      } catch (e) {
+        alert('Error: ' + e.message);
+      }
+    }
+
+    async function saveRotationStrategy() {
+      const strategy = document.getElementById('rotationStrategy').value;
+      try {
+        const r = await fetch('/api/proxies/rotation', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ strategy })
+        });
+        if (r.ok) {
+          alert('Rotation strategy updated');
+        } else {
+          alert('Failed to save');
+        }
+      } catch (e) {
+        alert('Error: ' + e.message);
+      }
+    }
+
+    function showAddProxyModal() {
+      document.getElementById('addProxyModal').style.display = 'flex';
+      document.getElementById('modalProxyName').value = '';
+      document.getElementById('modalProxyUrl').value = '';
+      document.getElementById('modalProxyCountry').value = '';
+    }
+
+    function closeAddProxyModal() {
+      document.getElementById('addProxyModal').style.display = 'none';
+    }
+
+    async function saveProxy() {
+      const name = document.getElementById('modalProxyName').value;
+      const url = document.getElementById('modalProxyUrl').value;
+      const country = document.getElementById('modalProxyCountry').value;
+      if (!name || !url) return alert('Name and URL are required');
+      if (!url.startsWith('socks5://')) return alert('URL must start with socks5://');
+
+      try {
+        const r = await fetch('/api/proxies', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, url, country })
+        });
+        if (r.ok) {
+          alert('Proxy added');
+          closeAddProxyModal();
+          loadProxies();
+        } else {
+          const d = await r.json();
+          alert('Failed: ' + d.error);
+        }
+      } catch (e) {
+        alert('Error: ' + e.message);
+      }
+    }
+
+    async function toggleProxy(id, enabled) {
+      try {
+        const r = await fetch(`/api/proxies/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled })
+        });
+        if (r.ok) loadProxies();
+        else alert('Failed to toggle');
+      } catch (e) {
+        alert('Error: ' + e.message);
+      }
+    }
+
+    async function deleteProxy(id) {
+      if (!confirm('Delete this proxy?')) return;
+      try {
+        const r = await fetch(`/api/proxies/${id}`, { method: 'DELETE' });
+        if (r.ok) loadProxies();
+        else alert('Failed to delete');
+      } catch (e) {
+        alert('Error: ' + e.message);
+      }
+    }
+
+    function showImportModal() {
+      document.getElementById('importModal').style.display = 'flex';
+      document.getElementById('importProxiesText').value = '';
+    }
+
+    function closeImportModal() {
+      document.getElementById('importModal').style.display = 'none';
+    }
+
+    async function saveImportProxies() {
+      const text = document.getElementById('importProxiesText').value;
+      try {
+        const proxies = JSON.parse(text);
+        const r = await fetch('/api/proxies/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ proxies })
+        });
+        if (r.ok) {
+          const d = await r.json();
+          alert(`Imported ${d.added} proxies (total: ${d.total})`);
+          closeImportModal();
+          loadProxies();
+        } else {
+          const d = await r.json();
+          alert('Failed: ' + d.error);
+        }
+      } catch (e) {
+        alert('Invalid JSON: ' + e.message);
+      }
+    }
+
+    function importProxies() {
+      showImportModal();
+    }
+
+    function closeImportModal() {
+      document.getElementById('importModal').style.display = 'none';
+    }
+
+    async function testAllProxies() {
+      const btn = event.target;
+      btn.disabled = true;
+      btn.textContent = 'Testing...';
+      try {
+        const r = await fetch('/api/proxies/test-all', { method: 'POST' });
+        const d = await r.json();
+        const passed = d.results.filter(r => r.success).length;
+        alert(`Tested ${d.results.length} proxies. ${passed} passed.`);
+        loadProxies();
+      } catch (e) {
+        alert('Test failed: ' + e.message);
+      }
+      btn.disabled = false;
+      btn.textContent = 'Test All';
+    }
+
+    async function importProxies() {
+      showImportModal();
+    }
+
+    async function saveRotationStrategy() {
+      const strategy = document.getElementById('rotationStrategy').value;
+      try {
+        const r = await fetch('/api/proxies/rotation', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ strategy })
+        });
+        if (r.ok) {
+          alert('Rotation strategy updated');
+        } else {
+          alert('Failed to save');
+        }
+      } catch (e) {
+        alert('Error: ' + e.message);
+      }
+    }
+
+    async function testNextProxy() {
+      try {
+        const r = await fetch('/api/proxies/next');
+        const d = await r.json();
+        document.getElementById('nextProxyInfo').textContent = d.proxy ? `Next: ${d.proxy.name} (${d.proxy.url})` : 'No proxies available';
+      } catch (e) {
+        alert('Error: ' + e.message);
+      }
+    }
+
+    // ========== VERSION & LOGO MANAGEMENT ==========
+    async function loadVersion() {
+      try {
+        const r = await fetch('/api/version');
+        const d = await r.json();
+        document.getElementById('versionDisplay').textContent = d.version || '1.10';
+      } catch (e) {
+        document.getElementById('versionDisplay').textContent = '1.10';
+      }
+    }
+
+    async function uploadLogo() {
+      const fileInput = document.getElementById('logoUpload');
+      const file = fileInput.files[0];
+      if (!file) return alert('Please select a PNG file');
+      if (file.type !== 'image/png') return alert('File must be PNG format');
+
+      const statusEl = document.getElementById('logoUploadStatus');
+      statusEl.textContent = 'Uploading and converting...';
+      statusEl.style.color = '#eab308';
+
+      try {
+        const base64 = await fileToBase64(file);
+        const r = await fetch('/api/admin/logo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ logoBase64: base64 })
+        });
+        const d = await r.json();
+        if (d.success) {
+          statusEl.textContent = 'Logo updated successfully!';
+          statusEl.style.color = '#22c55e';
+          document.getElementById('currentAdminLogo').src = '/logo-280.webp?' + Date.now();
+        } else {
+          statusEl.textContent = 'Failed: ' + d.error;
+          statusEl.style.color = '#ef4444';
+        }
+      } catch (e) {
+        statusEl.textContent = 'Error: ' + e.message;
+        statusEl.style.color = '#ef4444';
+      }
+    }
+
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function showTab(name) {
+      document.querySelectorAll('.tab').forEach(t => {
+        const text = t.textContent.toLowerCase();
+        const match = t.dataset.tab === name || text === name || (name === 'map' && text.includes('map')) || (name === 'settings' && text.includes('setting'));
+        t.classList.toggle('active', match);
+      });
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
+      if (name==='charts' && Object.keys(charts).length===0) setTimeout(() => initCharts(lastData), 100);
+      if (name==='map' && !window.mapInitialized) setTimeout(initMap, 100);
+      if (name==='map' && window.mapInitialized) setTimeout(() => map.invalidateSize(), 100);
+      if (name==='proxies') loadProxies();
+      if (name==='settings') loadVersion();
+    }
+
     loadStats();
     loadProgressBarSetting();
+    loadVersion();
     setInterval(loadStats, 5000);
   </script>
 </body>

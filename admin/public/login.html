@@ -9,6 +9,8 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
     .login-box { background: #1e293b; border: 1px solid #334155; border-radius: 16px; padding: 40px; width: 100%; max-width: 380px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); }
+    .login-logo { text-align: center; margin-bottom: 16px; }
+    .login-logo img { max-width: 180px; height: auto; }
     .login-box h1 { font-size: 1.5rem; font-weight: 700; color: #f8fafc; margin-bottom: 8px; text-align: center; }
     .login-box .subtitle { color: #94a3b8; text-align: center; margin-bottom: 32px; font-size: 0.9rem; }
     .form-group { margin-bottom: 20px; }
@@ -27,6 +29,9 @@
 </head>
 <body>
   <div class="login-box">
+    <div class="login-logo">
+      <img src="/logo-280.webp" srcset="/logo-280.webp 280w, /logo.webp 560w" sizes="180px" alt="ytdownmp3.cloud" width="180" height="180">
+    </div>
     <h1>Admin Panel</h1>
     <p class="subtitle">ytdownmp3.cloud</p>
     <form id="loginForm">

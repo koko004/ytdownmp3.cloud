@@ -2,16 +2,185 @@ const { Worker } = require('bullmq');
 const { spawn, execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
+const Redis = require('ioredis');
 
 const REDIS_HOST = process.env.REDIS_HOST || 'redis';
 const REDIS_PORT = process.env.REDIS_PORT || 6379;
 const DOWNLOADS_DIR = process.env.DOWNLOADS_DIR || '/app/downloads';
 const CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || '2', 10);
 const JOB_TIMEOUT = parseInt(process.env.JOB_TIMEOUT || '120000', 10);
+const HEALTH_PORT = parseInt(process.env.HEALTH_PORT || '3000', 10);
+const COOKIES_FILE = process.env.COOKIES_FILE || '/app/cookies.txt';
 
 if (!fs.existsSync(DOWNLOADS_DIR)) {
   fs.mkdirSync(DOWNLOADS_DIR, { recursive: true });
 }
+
+const redisClient = new Redis({ host: REDIS_HOST, port: REDIS_PORT, maxRetriesPerRequest: 1 });
+
+const hasCookiesFile = fs.existsSync(COOKIES_FILE);
+console.log(`[Worker] Cookies file: ${hasCookiesFile ? COOKIES_FILE : 'NOT FOUND'}`);
+console.log(`[Worker] Concurrency: ${CONCURRENCY}, Timeout: ${JOB_TIMEOUT}ms`);
+
+async function getAdminProxies() {
+  try {
+    const data = await redisClient.get('config:proxies');
+    if (!data) return [];
+    return JSON.parse(data).filter(p => p.enabled);
+  } catch (e) {
+    console.error('[Worker] Failed to get admin proxies:', e.message);
+    return [];
+  }
+}
+
+function buildYtDlpArgs(baseArgs, proxyUrl) {
+  const args = [...baseArgs];
+
+  if (proxyUrl) {
+    args.push('--proxy', proxyUrl);
+  }
+
+  if (hasCookiesFile) {
+    args.push('--cookies', COOKIES_FILE);
+  }
+
+  args.push('--extractor-args', 'youtube:player_client=web_safari');
+  args.push('--no-check-certificate');
+  args.push('--sleep-requests', '1');
+  args.push('--sleep-interval', '3');
+  args.push('--max-sleep-interval', '7');
+
+  return args;
+}
+
+async function tryYtDlp(args, timeout = 30000) {
+  return new Promise((resolve, reject) => {
+    execFile('yt-dlp', args, { timeout }, (err, stdout, stderr) => {
+      if (err) reject(new Error(stderr?.slice(0, 300) || err.message));
+      else resolve(stdout);
+    });
+  });
+}
+
+async function getVideoInfoWithFallback(url) {
+  const baseArgs = ['--dump-json', '--no-playlist', '--no-warnings'];
+
+  const adminProxies = await getAdminProxies();
+  const strategies = [
+    ...adminProxies.map(p => ({ name: p.name, proxy: p.url })),
+    { name: 'Direct', proxy: null },
+  ];
+
+  for (const strategy of strategies) {
+    try {
+      const args = buildYtDlpArgs(baseArgs, strategy.proxy);
+      args.push(url);
+      console.log(`[Worker] Trying info via ${strategy.name}${strategy.proxy ? ' (' + strategy.proxy.substring(0, 30) + '...)' : ''}`);
+      const stdout = await tryYtDlp(args, 30000);
+      console.log(`[Worker] Info fetched via ${strategy.name}`);
+      return JSON.parse(stdout);
+    } catch (err) {
+      console.warn(`[Worker] ${strategy.name} failed for info: ${err.message.slice(0, 200)}`);
+    }
+  }
+
+  throw new Error('All strategies failed to fetch video info');
+}
+
+async function downloadAndConvertWithFallback(jobId, url, format, job) {
+  const outputFile = path.join(DOWNLOADS_DIR, `${jobId}.${format}`);
+
+  let baseArgs;
+  if (format === 'mp3') {
+    baseArgs = [
+      '--no-playlist', '--no-warnings', '--newline',
+      '-x', '--audio-format', 'mp3', '--audio-quality', '0',
+      '-o', outputFile
+    ];
+  } else {
+    baseArgs = [
+      '--no-playlist', '--no-warnings', '--newline',
+      '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+      '--merge-output-format', 'mp4',
+      '-o', outputFile
+    ];
+  }
+
+  const adminProxies = await getAdminProxies();
+  const strategies = [
+    ...adminProxies.map(p => ({ name: p.name, proxy: p.url })),
+    { name: 'Direct', proxy: null },
+  ];
+
+  for (const strategy of strategies) {
+    try {
+      const args = buildYtDlpArgs(baseArgs, strategy.proxy);
+      args.push(url);
+      console.log(`[Worker] Downloading via ${strategy.name}${strategy.proxy ? ' (' + strategy.proxy.substring(0, 30) + '...)' : ''}`);
+
+      const result = await new Promise((resolve, reject) => {
+        const proc = spawn('yt-dlp', args);
+        let lastProgress = 10;
+        let stderrData = '';
+        const progressRegex = /(\d+\.?\d*)%/;
+
+        proc.stdout.on('data', (data) => {
+          const text = data.toString();
+          stderrData += text;
+          const match = text.match(progressRegex);
+          if (match) {
+            const progress = Math.min(parseFloat(match[1]), 99);
+            if (progress > lastProgress) {
+              lastProgress = progress;
+              job.updateProgress(progress);
+            }
+          }
+        });
+
+        proc.stderr.on('data', (data) => {
+          const text = data.toString();
+          stderrData += text;
+          const match = text.match(progressRegex);
+          if (match) {
+            const progress = Math.min(parseFloat(match[1]), 99);
+            if (progress > lastProgress) {
+              lastProgress = progress;
+              job.updateProgress(progress);
+            }
+          }
+        });
+
+        proc.on('close', (code) => {
+          if (code === 0) resolve(outputFile);
+          else reject(new Error(`exit ${code}: ${stderrData.slice(0, 500)}`));
+        });
+        proc.on('error', reject);
+      });
+
+      console.log(`[Worker] Download completed via ${strategy.name}`);
+      return result;
+    } catch (err) {
+      console.warn(`[Worker] ${strategy.name} failed for download: ${err.message.slice(0, 200)}`);
+    }
+  }
+
+  throw new Error('All strategies failed to download video');
+}
+
+const healthServer = http.createServer((req, res) => {
+  if (req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', service: 'worker', uptime: process.uptime() }));
+  } else {
+    res.writeHead(404);
+    res.end();
+  }
+});
+
+healthServer.listen(HEALTH_PORT, '0.0.0.0', () => {
+  console.log(`[Worker] Health server listening on port ${HEALTH_PORT}`);
+});
 
 function runCmd(cmd, args, timeout = JOB_TIMEOUT) {
   return new Promise((resolve, reject) => {
@@ -22,91 +191,10 @@ function runCmd(cmd, args, timeout = JOB_TIMEOUT) {
   });
 }
 
-function getVideoInfo(url) {
-  return new Promise((resolve, reject) => {
-    execFile('yt-dlp', [
-      '--dump-json', '--no-playlist', '--no-warnings', url
-    ], { timeout: 30000 }, (err, stdout) => {
-      if (err) return reject(new Error('Could not fetch video info. The video may be private or unavailable.'));
-      try {
-        resolve(JSON.parse(stdout));
-      } catch (e) {
-        reject(new Error('Failed to parse video metadata'));
-      }
-    });
-  });
-}
-
-function downloadAndConvert(jobId, url, format, job) {
-  return new Promise((resolve, reject) => {
-    const outputFile = path.join(DOWNLOADS_DIR, `${jobId}.${format}`);
-
-    let args;
-    if (format === 'mp3') {
-      args = [
-        '--no-playlist', '--no-warnings', '--newline',
-        '-x', '--audio-format', 'mp3', '--audio-quality', '0',
-        '-o', outputFile, url
-      ];
-    } else {
-      args = [
-        '--no-playlist', '--no-warnings', '--newline',
-        '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        '--merge-output-format', 'mp4',
-        '-o', outputFile, url
-      ];
-    }
-
-    const proc = spawn('yt-dlp', args);
-    let lastProgress = 10;
-    let stderrData = '';
-
-    const progressRegex = /(\d+\.?\d*)%\s+of\s+~?[\d.]+\w+/;
-
-    proc.stdout.on('data', (data) => {
-      const text = data.toString();
-      stderrData += text;
-      const match = text.match(progressRegex) || text.match(/(\d+\.?\d*)%/);
-      if (match) {
-        const progress = Math.min(parseFloat(match[1]), 99);
-        if (progress > lastProgress) {
-          lastProgress = progress;
-          job.updateProgress(progress);
-        }
-      }
-    });
-
-    proc.stderr.on('data', (data) => {
-      const text = data.toString();
-      stderrData += text;
-      const match = text.match(progressRegex) || text.match(/(\d+\.?\d*)%/);
-      if (match) {
-        const progress = Math.min(parseFloat(match[1]), 99);
-        if (progress > lastProgress) {
-          lastProgress = progress;
-          job.updateProgress(progress);
-        }
-      }
-    });
-
-    proc.on('close', (code) => {
-      if (code === 0) {
-        resolve(outputFile);
-      } else {
-        reject(new Error(`yt-dlp exited with code ${code}: ${stderrData.slice(0, 500)}`));
-      }
-    });
-
-    proc.on('error', (err) => {
-      reject(new Error(`Failed to spawn yt-dlp: ${err.message}`));
-    });
-  });
-}
-
 function embedCoverArt(coverPath, mediaPath, format) {
   if (format !== 'mp3') return Promise.resolve();
 
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const tmpOut = mediaPath + '.tmp';
     execFile('ffmpeg', [
       '-y', '-i', mediaPath, '-i', coverPath,
@@ -137,7 +225,7 @@ async function processJob(job) {
 
     let info;
     try {
-      info = await getVideoInfo(url);
+      info = await getVideoInfoWithFallback(url);
     } catch (err) {
       throw new Error(`Cannot access video: ${err.message}`);
     }
@@ -152,7 +240,7 @@ async function processJob(job) {
 
     await job.updateProgress(10);
 
-    const outputFile = await downloadAndConvert(jobId, url, format, job);
+    const outputFile = await downloadAndConvertWithFallback(jobId, url, format, job);
 
     if (!fs.existsSync(outputFile)) {
       const files = fs.readdirSync(DOWNLOADS_DIR).filter(f => f.startsWith(jobId));

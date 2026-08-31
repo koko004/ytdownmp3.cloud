@@ -11,7 +11,7 @@ const geoip = require('geoip-lite');
 
 const app = express();
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), { index: false }));
 
 const PORT = process.env.PORT || 4000;
 const REDIS_HOST = process.env.REDIS_HOST || 'redis';
@@ -169,14 +169,15 @@ async function fetchWithTimeout(url, ms = 3000) {
     }
 
     try {
-      const workerRes = await fetchWithTimeout('http://worker:3000/health').catch(() => null);
-      if (workerRes?.ok) {
-        services.push({ name: 'Worker', status: 'running', detail: 'Healthy' });
+      const activeCount = await conversionQueue.getActiveCount();
+      const waitingCount = await conversionQueue.getWaitingCount();
+      if (activeCount > 0 || waitingCount >= 0) {
+        services.push({ name: 'Worker', status: 'running', detail: `Active: ${activeCount}, Waiting: ${waitingCount}` });
       } else {
-        services.push({ name: 'Worker', status: 'stopped', detail: 'No health endpoint' });
+        services.push({ name: 'Worker', status: 'unknown', detail: 'No queue activity' });
       }
     } catch (e) {
-      services.push({ name: 'Worker', status: 'stopped', detail: e.message });
+      services.push({ name: 'Worker', status: 'error', detail: e.message });
     }
 
     try {
@@ -240,16 +241,17 @@ function recordHistory() {
   Object.keys(history).forEach(k => { if (history[k].length > HISTORY_MAX) history[k] = history[k].slice(-HISTORY_MAX); });
 }
 
+app.set('trust proxy', 1);
 app.use(session({
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  cookie: { secure: false, httpOnly: true, maxAge: 24 * 60 * 60 * 1000 },
+  cookie: { secure: 'auto', httpOnly: true, maxAge: 24 * 60 * 60 * 1000, sameSite: 'lax' },
 }));
 
 const requireAuth = (req, res, next) => {
   if (req.session.authenticated) return next();
-  if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Unauthorized' });
+  if (req.originalUrl.startsWith('/api/')) return res.status(401).json({ error: 'Unauthorized' });
   res.redirect('/login');
 };
 
@@ -276,6 +278,56 @@ app.get('/api/auth/status', (req, res) => {
   res.json({ authenticated: !!req.session.authenticated, user: req.session.user });
 });
 
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', service: 'admin', uptime: process.uptime() });
+});
+
+app.get('/api/version', (req, res) => {
+  try {
+    const version = fs.readFileSync(path.join(__dirname, '..', 'VERSION'), 'utf8').trim();
+    res.json({ version });
+  } catch (e) {
+    res.json({ version: '1.10' });
+  }
+});
+
+// Logo upload endpoint
+app.post('/api/admin/logo', requireAuth, async (req, res) => {
+  try {
+    const { logoBase64 } = req.body;
+    if (!logoBase64 || !logoBase64.startsWith('data:image/png;base64,')) {
+      return res.status(400).json({ error: 'Invalid PNG image' });
+    }
+    
+    const base64Data = logoBase64.replace('data:image/png;base64,', '');
+    const pngBuffer = Buffer.from(base64Data, 'base64');
+    
+    // Save original PNG
+    const pngPath = path.join(__dirname, 'public', 'admin-logo.png');
+    fs.writeFileSync(pngPath, pngBuffer);
+    
+    // Convert to WebP (two sizes)
+    const { execSync } = require('child_process');
+    execSync(`cwebp -q 80 -resize 560 560 ${pngPath} -o ${path.join(__dirname, 'public', 'logo.webp')}`);
+    execSync(`cwebp -q 80 -resize 280 280 ${pngPath} -o ${path.join(__dirname, 'public', 'logo-280.webp')}`);
+    
+    res.json({ success: true, message: 'Logo updated successfully' });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to process logo', detail: e.message });
+  }
+});
+
+// Public API endpoints (no auth required)
+app.get('/api/public/progress-bar', async (req, res) => {
+  try {
+    const type = await redisClient.get('config:progressBarType') || 'bubble';
+    res.json({ type });
+  } catch (e) {
+    res.json({ type: 'bubble' });
+  }
+});
+
+// Auth middleware for all other /api routes
 app.use('/api', requireAuth);
 
 app.get('/api/stats', async (req, res) => {
@@ -306,10 +358,6 @@ app.get('/api/stats', async (req, res) => {
   }
 });
 
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', service: 'admin', uptime: process.uptime() });
-});
-
 app.get('/api/config/progress-bar', async (req, res) => {
   try {
     const type = await redisClient.get('config:progressBarType') || 'bubble';
@@ -319,7 +367,7 @@ app.get('/api/config/progress-bar', async (req, res) => {
   }
 });
 
-app.post('/api/config/progress-bar', requireAuth, async (req, res) => {
+app.post('/api/config/progress-bar', async (req, res) => {
   try {
     const { type } = req.body;
     if (!['bubble', 'striped'].includes(type)) {
@@ -332,18 +380,301 @@ app.post('/api/config/progress-bar', requireAuth, async (req, res) => {
   }
 });
 
-// Public endpoint for frontend
-app.get('/api/public/progress-bar', async (req, res) => {
+// ========== PROXY MANAGEMENT API ==========
+
+const PROXY_KEY = 'config:proxies';
+const PROXY_STATS_KEY = 'config:proxy_stats';
+const ROTATION_KEY = 'config:proxy_rotation';
+
+async function getProxies() {
+  const data = await redisClient.get(PROXY_KEY);
+  return data ? JSON.parse(data) : [];
+}
+
+async function saveProxies(proxies) {
+  await redisClient.set(PROXY_KEY, JSON.stringify(proxies));
+}
+
+async function getProxyStats() {
+  const data = await redisClient.get(PROXY_STATS_KEY);
+  return data ? JSON.parse(data) : {};
+}
+
+async function saveProxyStats(stats) {
+  await redisClient.set(PROXY_STATS_KEY, JSON.stringify(stats));
+}
+
+async function getRotationConfig() {
+  const data = await redisClient.get(ROTATION_KEY);
+  return data ? JSON.parse(data) : { strategy: 'round_robin', currentIndex: 0 };
+}
+
+async function saveRotationConfig(config) {
+  await redisClient.set(ROTATION_KEY, JSON.stringify(config));
+}
+
+// Get all proxies
+app.get('/api/proxies', async (req, res) => {
   try {
-    const type = await redisClient.get('config:progressBarType') || 'bubble';
-    res.json({ type });
+    const proxies = await getProxies();
+    const stats = await getProxyStats();
+    const rotation = await getRotationConfig();
+    res.json({ proxies, stats, rotation });
   } catch (e) {
-    res.json({ type: 'bubble' });
+    res.status(500).json({ error: 'Failed to get proxies' });
   }
 });
 
-app.get('*', requireAuth, (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+// Add new proxy
+app.post('/api/proxies', async (req, res) => {
+  try {
+    const { url, name, country, enabled = true } = req.body;
+    if (!url || !url.startsWith('socks5://')) {
+      return res.status(400).json({ error: 'URL must start with socks5://' });
+    }
+    const proxies = await getProxies();
+    const newProxy = {
+      id: crypto.randomUUID(),
+      url,
+      name: name || url,
+      country: country || 'Unknown',
+      enabled,
+      createdAt: Date.now(),
+      lastTested: null,
+      latency: null
+    };
+    proxies.push(newProxy);
+    await saveProxies(proxies);
+    res.json({ success: true, proxy: newProxy });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to add proxy' });
+  }
+});
+
+// Update proxy
+app.put('/api/proxies/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body;
+    const proxies = await getProxies();
+    const idx = proxies.findIndex(p => p.id === id);
+    if (idx === -1) return res.status(404).json({ error: 'Proxy not found' });
+    proxies[idx] = { ...proxies[idx], ...updates };
+    await saveProxies(proxies);
+    res.json({ success: true, proxy: proxies[idx] });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to update proxy' });
+  }
+});
+
+// Delete proxy
+app.delete('/api/proxies/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    let proxies = await getProxies();
+    proxies = proxies.filter(p => p.id !== id);
+    await saveProxies(proxies);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to delete proxy' });
+  }
+});
+
+// Test single proxy
+app.post('/api/proxies/:id/test', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const proxies = await getProxies();
+    const proxy = proxies.find(p => p.id === id);
+    if (!proxy) return res.status(404).json({ error: 'Proxy not found' });
+
+    const start = Date.now();
+    let success = false;
+    let error = null;
+
+    try {
+      const { default: fetch } = await import('node-fetch');
+      const agent = new (await import('socks-proxy-agent')).SocksProxyAgent(proxy.url);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      const response = await fetch('https://www.youtube.com', {
+        agent,
+        signal: controller.signal,
+        method: 'HEAD'
+      });
+      clearTimeout(timeout);
+      success = response.ok;
+      if (!success) error = `HTTP ${response.status}`;
+    } catch (e) {
+      error = e.message;
+    }
+
+    const latency = Date.now() - start;
+    const stats = await getProxyStats();
+    stats[proxy.id] = stats[proxy.id] || { total: 0, success: 0, failed: 0, totalLatency: 0 };
+    stats[proxy.id].total++;
+    stats[proxy.id].totalLatency += latency;
+    if (success) stats[proxy.id].success++; else stats[proxy.id].failed++;
+    stats[proxy.id].avgLatency = Math.round(stats[proxy.id].totalLatency / stats[proxy.id].total);
+    stats[proxy.id].successRate = Math.round((stats[proxy.id].success / stats[proxy.id].total) * 100);
+    await saveProxyStats(stats);
+
+    const updatedProxies = await getProxies();
+    const pIdx = updatedProxies.findIndex(p => p.id === id);
+    if (pIdx !== -1) {
+      updatedProxies[pIdx].lastTested = Date.now();
+      updatedProxies[pIdx].latency = latency;
+      await saveProxies(updatedProxies);
+    }
+
+    res.json({ success, latency, error, stats: stats[proxy.id] });
+  } catch (e) {
+    res.status(500).json({ error: 'Test failed', detail: e.message });
+  }
+});
+
+// Test all proxies
+app.post('/api/proxies/test-all', async (req, res) => {
+  try {
+    const proxies = await getProxies();
+    const enabledProxies = proxies.filter(p => p.enabled);
+    const results = [];
+
+    for (const proxy of enabledProxies) {
+      try {
+        const { default: fetch } = await import('node-fetch');
+        const agent = new (await import('socks-proxy-agent')).SocksProxyAgent(proxy.url);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const start = Date.now();
+        const response = await fetch('https://www.youtube.com', {
+          agent,
+          signal: controller.signal,
+          method: 'HEAD'
+        });
+        clearTimeout(timeout);
+        const latency = Date.now() - start;
+        const success = response.ok;
+        results.push({ id: proxy.id, name: proxy.name, success, latency, error: success ? null : `HTTP ${response.status}` });
+      } catch (e) {
+        results.push({ id: proxy.id, name: proxy.name, success: false, latency: null, error: e.message });
+      }
+    }
+
+    // Update stats
+    const stats = await getProxyStats();
+    for (const r of results) {
+      if (!stats[r.id]) stats[r.id] = { total: 0, success: 0, failed: 0, totalLatency: 0 };
+      stats[r.id].total++;
+      if (r.success) stats[r.id].success++; else stats[r.id].failed++;
+      if (r.latency) stats[r.id].totalLatency += r.latency;
+      stats[r.id].avgLatency = Math.round(stats[r.id].totalLatency / stats[r.id].total);
+      stats[r.id].successRate = Math.round((stats[r.id].success / stats[r.id].total) * 100);
+    }
+    await saveProxyStats(stats);
+
+    res.json({ results });
+  } catch (e) {
+    res.status(500).json({ error: 'Batch test failed', detail: e.message });
+  }
+});
+
+// Update rotation config
+app.post('/api/proxies/rotation', async (req, res) => {
+  try {
+    const { strategy } = req.body;
+    if (!['round_robin', 'random', 'least_used', 'sticky'].includes(strategy)) {
+      return res.status(400).json({ error: 'Invalid strategy' });
+    }
+    await saveRotationConfig({ strategy, currentIndex: 0 });
+    res.json({ success: true, strategy });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to update rotation config' });
+  }
+});
+
+// Get next proxy for rotation
+app.get('/api/proxies/next', async (req, res) => {
+  try {
+    const proxies = await getProxies();
+    const enabled = proxies.filter(p => p.enabled);
+    if (enabled.length === 0) return res.status(404).json({ error: 'No enabled proxies' });
+
+    const rotation = await getRotationConfig();
+    let selected;
+
+    switch (rotation.strategy) {
+      case 'random':
+        selected = enabled[Math.floor(Math.random() * enabled.length)];
+        break;
+      case 'least_used':
+        const stats = await getProxyStats();
+        selected = enabled.reduce((min, p) => {
+          const s = stats[p.id] || { total: 0 };
+          const minS = stats[min.id] || { total: 0 };
+          return s.total < minS.total ? p : min;
+        });
+        break;
+      case 'sticky':
+        // Use current index but don't increment
+        selected = enabled[rotation.currentIndex % enabled.length];
+        break;
+      case 'round_robin':
+      default:
+        selected = enabled[rotation.currentIndex % enabled.length];
+        rotation.currentIndex = (rotation.currentIndex + 1) % enabled.length;
+        await saveRotationConfig(rotation);
+        break;
+    }
+
+    res.json({ proxy: selected, rotation: rotation.strategy });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to get next proxy' });
+  }
+});
+
+// Bulk import proxies
+app.post('/api/proxies/import', async (req, res) => {
+  try {
+    const { proxies } = req.body;
+    if (!Array.isArray(proxies)) return res.status(400).json({ error: 'Expected array' });
+
+    const existing = await getProxies();
+    const existingUrls = new Set(existing.map(p => p.url));
+    let added = 0;
+
+    for (const p of proxies) {
+      if (!p.url || !p.url.startsWith('socks5://')) continue;
+      if (existingUrls.has(p.url)) continue;
+      existing.push({
+        id: crypto.randomUUID(),
+        url: p.url,
+        name: p.name || p.url,
+        country: p.country || 'Unknown',
+        enabled: p.enabled !== false,
+        createdAt: Date.now(),
+        lastTested: null,
+        latency: null
+      });
+      added++;
+    }
+
+    await saveProxies(existing);
+    res.json({ success: true, added, total: existing.length });
+  } catch (e) {
+    res.status(500).json({ error: 'Import failed' });
+  }
+});
+
+app.get('*', (req, res) => {
+  if (req.path.startsWith('/api/')) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  if (req.session.authenticated) {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  } else {
+    res.redirect('/login');
+  }
 });
 
 setInterval(recordHistory, 30000);

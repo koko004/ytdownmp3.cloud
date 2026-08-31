@@ -11,6 +11,8 @@
     "bullmq": "^5.0.0",
     "express-session": "^1.17.3",
     "geoip-lite": "^1.4.7",
-    "ioredis": "^5.3.2"
+    "ioredis": "^5.3.2",
+    "node-fetch": "^3.3.2",
+    "socks-proxy-agent": "^8.0.4"
   }
 }

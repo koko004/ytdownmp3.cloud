@@ -1,0 +1,101 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    image: koko004/ytdownmp3-api:latest
+    restart: unless-stopped
+    ports:
+      - "8080:3000"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DOWNLOADS_DIR=/app/downloads
+    volumes:
+      - downloads:/app/downloads
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile.worker
+    image: koko004/ytdownmp3-worker:latest
+    restart: unless-stopped
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DOWNLOADS_DIR=/app/downloads
+      - WORKER_CONCURRENCY=2
+      - JOB_TIMEOUT=120000
+      - COOKIES_FILE=/app/cookies.txt
+    volumes:
+      - downloads:/app/downloads
+      - ./cookies.txt:/app/cookies.txt:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: koko004/ytdownmp3-frontend:latest
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+
+  admin:
+    build:
+      context: ./admin
+      dockerfile: Dockerfile
+    image: koko004/ytdownmp3-admin:latest
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - ADMIN_USER=admin
+      - ADMIN_PASS=changeme123
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  watchtower:
+    image: containrrr/watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_REVIVE_STOPPED=true
+      - WATCHTOWER_POLL_INTERVAL=21600
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_INCLUDE_STOPPED=true
+    command: >
+      --label-enable
+      --cleanup
+      --revive-stopped
+      --poll-interval 21600
+
+volumes:
+  redis-data:
+  downloads:

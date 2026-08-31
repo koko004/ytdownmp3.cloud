@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   redis:
     image: redis:7-alpine
@@ -29,6 +27,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
 
   worker:
     image: koko004/ytdownmp3-worker:latest
@@ -39,11 +39,15 @@ services:
       - DOWNLOADS_DIR=/app/downloads
       - WORKER_CONCURRENCY=2
       - JOB_TIMEOUT=120000
+      - COOKIES_FILE=/app/cookies.txt
     volumes:
       - downloads:/app/downloads
+      - ./cookies.txt:/app/cookies.txt:ro
     depends_on:
       redis:
         condition: service_healthy
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
 
   frontend:
     image: koko004/ytdownmp3-frontend:latest
@@ -52,6 +56,8 @@ services:
       - "3000:80"
     depends_on:
       - api
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
 
   admin:
     image: koko004/ytdownmp3-admin:latest
@@ -66,6 +72,25 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
+  watchtower:
+    image: containrrr/watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_REVIVE_STOPPED=true
+      - WATCHTOWER_POLL_INTERVAL=21600
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_INCLUDE_STOPPED=true
+    command: >
+      --label-enable
+      --cleanup
+      --revive-stopped
+      --poll-interval 21600
 
 volumes:
   redis-data:
