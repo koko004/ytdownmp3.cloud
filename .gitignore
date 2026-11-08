@@ -2,3 +2,5 @@ node_modules/
 output/
 *.log
 .playwright-mcp/
+cookies.txt
+frontend/public/ffmpeg/
