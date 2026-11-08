@@ -1,4 +1,5 @@
 const express = require('express');
+const http = require('http');
 const { Queue } = require('bullmq');
 const Redis = require('ioredis');
 const os = require('os');
@@ -8,6 +9,7 @@ const { execSync, exec } = require('child_process');
 const crypto = require('crypto');
 const session = require('express-session');
 const geoip = require('geoip-lite');
+const { WebSocketServer } = require('ws');
 
 const app = express();
 app.use(express.json());
@@ -37,11 +39,55 @@ const history = {
 };
 const HISTORY_MAX = 288;
 
+// In Docker the host's /proc, /sys and /etc/os-release are bind-mounted
+// read-only under /host. Native installs have no /host, so use the local paths.
+const HOST_PREFIX = fs.existsSync('/host/proc/cpuinfo') ? '/host' : '';
+
+function readHostFile(p) {
+  return fs.readFileSync(HOST_PREFIX + p, 'utf8');
+}
+
+function getLinuxDistro() {
+  for (const p of [`${HOST_PREFIX}/etc/os-release`, '/etc/os-release']) {
+    try {
+      const osRelease = fs.readFileSync(p, 'utf8');
+      const name = osRelease.match(/^PRETTY_NAME="?([^"\n]+)"?/m);
+      if (name) return name[1];
+    } catch (e) {}
+  }
+  return 'Linux';
+}
+
 function getSystemStats() {
-  const cpus = os.cpus();
-  const totalMem = os.totalmem();
-  const freeMem = os.freemem();
-  const usedMem = totalMem - freeMem;
+  let cpus = os.cpus();
+  let totalMem = os.totalmem();
+  let freeMem = os.freemem();
+  let usedMem = totalMem - freeMem;
+
+  try {
+    const cpuInfo = readHostFile('/proc/cpuinfo');
+    const processorCount = (cpuInfo.match(/^processor\s*:/gm) || []).length;
+    const modelMatch = cpuInfo.match(/^model name\s*:\s*(.+)/m);
+    const speedMatch = cpuInfo.match(/^cpu MHz\s*:\s*(.+)/m);
+    if (processorCount > 0) {
+      cpus = Array(processorCount).fill({
+        model: modelMatch ? modelMatch[1].trim() : cpus[0]?.model || 'unknown',
+        speed: speedMatch ? parseFloat(speedMatch[1]) : cpus[0]?.speed || 0,
+        times: { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 }
+      });
+    }
+  } catch (e) {}
+
+  try {
+    const meminfo = readHostFile('/proc/meminfo');
+    const getVal = (key) => {
+      const m = meminfo.match(new RegExp(`${key}:\\s+(\\d+)`));
+      return m ? parseInt(m[1]) * 1024 : 0;
+    };
+    totalMem = getVal('MemTotal');
+    freeMem = getVal('MemAvailable') || getVal('MemFree');
+    usedMem = totalMem - freeMem;
+  } catch (e) {}
 
   let loadAvg = [0, 0, 0];
   try {
@@ -55,9 +101,28 @@ function getSystemStats() {
     diskUsage = { total: parseInt(df[1]), used: parseInt(df[2]), free: parseInt(df[3]) };
   } catch (e) {}
 
+  let swapInfo = { total: 0, used: 0, free: 0 };
+  try {
+    const meminfo = readHostFile('/proc/meminfo');
+    const getValue = (key) => {
+      const match = meminfo.match(new RegExp(`${key}:\\s+(\\d+)`));
+      return match ? parseInt(match[1]) * 1024 : 0;
+    };
+    swapInfo = { total: getValue('SwapTotal'), used: getValue('SwapTotal') - getValue('SwapFree'), free: getValue('SwapFree') };
+  } catch (e) {}
+
+  let cpuTemp = null;
+  try {
+    const thermal = execSync(`cat ${HOST_PREFIX}/sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo 0`).toString().trim();
+    const temp = parseInt(thermal);
+    if (temp > 0) cpuTemp = (temp / 1000).toFixed(1) + '°C';
+  } catch (e) {}
+
+  let cpuSpeed = cpus[0]?.speed || 0;
+
   let networkInfo = { interfaces: [], totalRx: 0, totalTx: 0 };
   try {
-    const netDev = fs.readFileSync('/proc/net/dev', 'utf8');
+    const netDev = readHostFile('/proc/net/dev');
     const lines = netDev.split('\n').slice(2);
     for (const line of lines) {
       if (!line.trim()) continue;
@@ -77,24 +142,43 @@ function getSystemStats() {
     }
   } catch (e) {}
 
+  let cpuUsage = { avgUsage: '0', usage: [] };
+  try {
+    const stat = readHostFile('/proc/stat');
+    const lines = stat.split('\n');
+    const cpuLines = lines.filter(l => /^cpu\d/.test(l));
+    cpuUsage.usage = cpuLines.map((line, i) => {
+      const parts = line.trim().split(/\s+/);
+      const user = parseInt(parts[1]) || 0;
+      const nice = parseInt(parts[2]) || 0;
+      const sys = parseInt(parts[3]) || 0;
+      const idle = parseInt(parts[4]) || 0;
+      const irq = parseInt(parts[5]) || 0;
+      const total = user + nice + sys + idle + irq;
+      const usagePercent = total > 0 ? ((total - idle) / total * 100).toFixed(1) : '0';
+      return { user, nice, sys, idle, irq, usagePercent };
+    });
+    const totalAll = cpuUsage.usage.reduce((acc, c) => acc + parseFloat(c.usagePercent), 0);
+    cpuUsage.avgUsage = cpuLines.length > 0 ? (totalAll / cpuLines.length).toFixed(1) : '0';
+  } catch (e) {}
+
   return {
     hostname: os.hostname(),
     platform: os.platform(),
     arch: os.arch(),
+    distro: getLinuxDistro(),
     uptime: os.uptime(),
     cpu: {
       model: cpus[0]?.model || 'unknown',
+      speed: cpuSpeed,
       cores: cpus.length,
-      usage: cpus.map(c => {
-        const total = Object.values(c.times).reduce((a, b) => a + b, 0);
-        return { user: c.times.user, nice: c.times.nice, sys: c.times.sys, idle: c.times.idle, irq: c.times.irq, usagePercent: ((total - c.times.idle) / total * 100).toFixed(1) };
-      }),
-      avgUsage: (cpus.reduce((acc, c) => {
-        const total = Object.values(c.times).reduce((a, b) => a + b, 0);
-        return acc + ((total - c.times.idle) / total * 100);
-      }, 0) / cpus.length).toFixed(1),
+      threads: cpus.length,
+      temperature: cpuTemp,
+      usage: cpuUsage.usage,
+      avgUsage: cpuUsage.avgUsage,
     },
     memory: { total: totalMem, used: usedMem, free: freeMem, usagePercent: (usedMem / totalMem * 100).toFixed(1) },
+    swap: swapInfo,
     loadAvg,
     disk: diskUsage,
     network: networkInfo,
@@ -110,12 +194,12 @@ async function getQueueStats() {
       conversionQueue.getFailedCount(),
       conversionQueue.getDelayedCount(),
     ]);
-    const recentJobs = await conversionQueue.getJobs(['completed', 'failed'], 0, 49);
+    const recentJobs = await conversionQueue.getJobs(['completed', 'failed', 'active', 'waiting', 'delayed'], 0, 99);
     const jobHistory = recentJobs.map(j => ({
       id: j.id, jobId: j.data.jobId, url: j.data.url, format: j.data.format,
       status: j.state, timestamp: j.timestamp,
       duration: j.finishedOn && j.processedOn ? j.finishedOn - j.processedOn : null,
-    }));
+    })).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
     return { counts: { waiting, active, completed, failed, delayed, total: waiting + active + completed + failed + delayed }, recentJobs, jobHistory };
   } catch (err) {
     console.error('[Admin] Queue stats error:', err);
@@ -125,14 +209,34 @@ async function getQueueStats() {
 
 function getMachineIPs() {
   const ips = [];
-  const nets = os.networkInterfaces();
-  for (const name of Object.keys(nets)) {
-    for (const net of nets[name]) {
-      if (net.family === 'IPv4' && !net.internal) {
-        ips.push({ interface: name, ip: net.address, netmask: net.netmask, mac: net.mac });
+  try {
+    const output = readHostFile('/proc/net/fib_trie');
+    const sections = output.split('Main');
+    for (const section of sections) {
+      const lines = section.split('\n');
+      let currentIface = '';
+      for (const line of lines) {
+        const ifaceMatch = line.match(/^(\s+)(\S+)$/);
+        if (ifaceMatch && !ifaceMatch[2].match(/^\d/)) { currentIface = ifaceMatch[2]; continue; }
+        const ipMatch = line.match(/\/32 host LOCAL\s+(\d+\.\d+\.\d+\.\d+)/);
+        if (ipMatch && !ipMatch[1].startsWith('127.') && ipMatch[1] !== '0.0.0.0') {
+          const exists = ips.find(i => i.ip === ipMatch[1]);
+          if (!exists) ips.push({ interface: currentIface || 'unknown', ip: ipMatch[1], netmask: '255.255.255.0', mac: '' });
+        }
       }
     }
-  }
+  } catch (e) {}
+  try {
+    const nets = os.networkInterfaces();
+    for (const name of Object.keys(nets)) {
+      for (const net of nets[name]) {
+        if (net.family === 'IPv4' && !net.internal) {
+          const exists = ips.find(i => i.ip === net.address);
+          if (!exists) ips.push({ interface: name, ip: net.address, netmask: net.netmask, mac: net.mac });
+        }
+      }
+    }
+  } catch (e) {}
   return ips;
 }
 
@@ -157,7 +261,7 @@ async function fetchWithTimeout(url, ms = 3000) {
     }
 
     try {
-      const apiRes = await fetchWithTimeout('http://api:3000/health');
+      const apiRes = await fetchWithTimeout(process.env.API_HEALTH_URL || 'http://172.17.0.1:8081/health');
       if (apiRes.ok) {
         const data = await apiRes.json();
         services.push({ name: 'API', status: 'running', detail: data.status });
@@ -181,7 +285,7 @@ async function fetchWithTimeout(url, ms = 3000) {
     }
 
     try {
-      const frontendRes = await fetchWithTimeout('http://frontend/health').catch(() => null);
+      const frontendRes = await fetchWithTimeout(process.env.FRONTEND_HEALTH_URL || 'http://frontend:80/health').catch(() => null);
       if (frontendRes?.ok) {
         services.push({ name: 'Frontend', status: 'running', detail: 'Healthy' });
       } else {
@@ -238,7 +342,11 @@ function recordHistory() {
   history.disk.push({ time: now, value: (sys.disk.used / sys.disk.total * 100).toFixed(1) });
   history.network.push({ time: now, rx: sys.network.totalRx, tx: sys.network.totalTx });
   history.visitors.push({ time: now, count: visitorLog.length });
-  Object.keys(history).forEach(k => { if (history[k].length > HISTORY_MAX) history[k] = history[k].slice(-HISTORY_MAX); });
+  getQueueStats().then(q => {
+    history.queue.push({ time: now, value: q.counts.active });
+    if (history.queue.length > HISTORY_MAX) history.queue = history.queue.slice(-HISTORY_MAX);
+  }).catch(() => {});
+  Object.keys(history).forEach(k => { if (k !== 'queue' && history[k].length > HISTORY_MAX) history[k] = history[k].slice(-HISTORY_MAX); });
 }
 
 app.set('trust proxy', 1);
@@ -246,11 +354,18 @@ app.use(session({
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  cookie: { secure: 'auto', httpOnly: true, maxAge: 24 * 60 * 60 * 1000, sameSite: 'lax' },
+  cookie: { secure: 'auto', httpOnly: true, maxAge: 24 * 60 * 60 * 1000, sameSite: 'lax', path: '/' },
 }));
+
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api/') && !req.path.startsWith('/api/public/')) return next();
+  trackVisitor(req);
+  next();
+});
 
 const requireAuth = (req, res, next) => {
   if (req.session.authenticated) return next();
+  if (req.path === '/login' || req.path === '/api/login') return next();
   if (req.originalUrl.startsWith('/api/')) return res.status(401).json({ error: 'Unauthorized' });
   res.redirect('/login');
 };
@@ -533,14 +648,15 @@ app.post('/api/proxies/:id/test', async (req, res) => {
   }
 });
 
-// Test all proxies
+// Test all proxies (parallel with concurrency limit)
 app.post('/api/proxies/test-all', async (req, res) => {
   try {
     const proxies = await getProxies();
     const enabledProxies = proxies.filter(p => p.enabled);
     const results = [];
+    const CONCURRENCY = 5;
 
-    for (const proxy of enabledProxies) {
+    async function testOne(proxy) {
       try {
         const { default: fetch } = await import('node-fetch');
         const agent = new (await import('socks-proxy-agent')).SocksProxyAgent(proxy.url);
@@ -548,9 +664,7 @@ app.post('/api/proxies/test-all', async (req, res) => {
         const timeout = setTimeout(() => controller.abort(), 10000);
         const start = Date.now();
         const response = await fetch('https://www.youtube.com', {
-          agent,
-          signal: controller.signal,
-          method: 'HEAD'
+          agent, signal: controller.signal, method: 'HEAD'
         });
         clearTimeout(timeout);
         const latency = Date.now() - start;
@@ -561,7 +675,11 @@ app.post('/api/proxies/test-all', async (req, res) => {
       }
     }
 
-    // Update stats
+    for (let i = 0; i < enabledProxies.length; i += CONCURRENCY) {
+      const batch = enabledProxies.slice(i, i + CONCURRENCY);
+      await Promise.all(batch.map(p => testOne(p)));
+    }
+
     const stats = await getProxyStats();
     for (const r of results) {
       if (!stats[r.id]) stats[r.id] = { total: 0, success: 0, failed: 0, totalLatency: 0 };
@@ -633,6 +751,25 @@ app.get('/api/proxies/next', async (req, res) => {
   }
 });
 
+// Disable proxy when YouTube blocks it (called by worker)
+app.post('/api/proxies/:id/disable', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body || {};
+    const proxies = await getProxies();
+    const idx = proxies.findIndex(p => p.id === id);
+    if (idx === -1) return res.status(404).json({ error: 'Proxy not found' });
+    proxies[idx].enabled = false;
+    proxies[idx].disabledReason = reason || 'blocked';
+    proxies[idx].disabledAt = Date.now();
+    await saveProxies(proxies);
+    console.log(`[Admin] Proxy ${proxies[idx].name} auto-disabled: ${reason}`);
+    res.json({ success: true, proxy: proxies[idx] });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to disable proxy' });
+  }
+});
+
 // Bulk import proxies
 app.post('/api/proxies/import', async (req, res) => {
   try {
@@ -677,11 +814,252 @@ app.get('*', (req, res) => {
   }
 });
 
+// ========== HTTP SERVER + WEBSOCKET ==========
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server });
+
+// ========== LOG STREAMING ==========
+const LOG_BUFFER_KEY = 'logs:buffer';
+const LOG_CHANNEL = 'logs:stream';
+const LOG_BUFFER_MAX = 2000;
+
+const logSubscriber = new Redis({ host: REDIS_HOST, port: REDIS_PORT, maxRetriesPerRequest: 1 });
+logSubscriber.subscribe(LOG_CHANNEL).catch(() => {});
+logSubscriber.on('message', (channel, message) => {
+  if (channel === LOG_CHANNEL) {
+    wss.clients.forEach(client => {
+      if (client.readyState === 1) {
+        try { client.send(message); } catch (e) {}
+      }
+    });
+  }
+});
+
+wss.on('connection', async (ws) => {
+  console.log('[Admin] WebSocket client connected');
+  try {
+    const buffer = await redisClient.lrange(LOG_BUFFER_KEY, 0, -1);
+    for (const line of buffer) {
+      try { ws.send(line); } catch (e) { break; }
+    }
+  } catch (e) {}
+  ws.on('close', () => console.log('[Admin] WebSocket client disconnected'));
+});
+
+async function publishLog(level, source, ...args) {
+  const msg = JSON.stringify({ t: Date.now(), l: level, s: source, m: args.join(' ') });
+  try {
+    await redisClient.rpush(LOG_BUFFER_KEY, msg);
+    await redisClient.ltrim(LOG_BUFFER_KEY, -LOG_BUFFER_MAX, -1);
+    await redisClient.publish(LOG_CHANNEL, msg);
+  } catch (e) {}
+}
+
+// Override console for admin logs
+const _origLog = console.log;
+const _origError = console.error;
+const _origWarn = console.warn;
+console.log = (...a) => { _origLog(...a); publishLog('info', 'admin', ...a); };
+console.error = (...a) => { _origError(...a); publishLog('error', 'admin', ...a); };
+console.warn = (...a) => { _origWarn(...a); publishLog('warn', 'admin', ...a); };
+
+// ========== PROXY HEALTH CHECK CRON ==========
+const HEALTH_CHECK_BATCH = 20;
+const HEALTH_CHECK_INTERVAL = 15 * 60 * 1000;
+
+async function testSingleProxy(proxy) {
+  const start = Date.now();
+  try {
+    const { default: fetch } = await import('node-fetch');
+    const agent = new (await import('socks-proxy-agent')).SocksProxyAgent(proxy.url);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    const response = await fetch('https://www.youtube.com', { agent, signal: controller.signal, method: 'HEAD' });
+    clearTimeout(timeout);
+    const latency = Date.now() - start;
+    return { id: proxy.id, name: proxy.name, success: response.ok, latency, error: response.ok ? null : `HTTP ${response.status}` };
+  } catch (e) {
+    return { id: proxy.id, name: proxy.name, success: false, latency: null, error: e.message };
+  }
+}
+
+async function runProxyHealthCheck() {
+  try {
+    const proxies = await getProxies();
+    if (proxies.length === 0) return;
+
+    let lastIndex = parseInt(await redisClient.get('config:proxyHealthIndex') || '0');
+    const batch = [];
+    for (let i = 0; i < HEALTH_CHECK_BATCH; i++) {
+      batch.push(proxies[(lastIndex + i) % proxies.length]);
+    }
+
+    console.log(`[Admin] Health check: testing ${batch.length} proxies (starting from index ${lastIndex})...`);
+
+    const results = [];
+    const CONCURRENCY = 5;
+    for (let i = 0; i < batch.length; i += CONCURRENCY) {
+      const chunk = batch.slice(i, i + CONCURRENCY);
+      const chunkResults = await Promise.allSettled(chunk.map(p => testSingleProxy(p)));
+      for (const r of chunkResults) {
+        results.push(r.value || (r.reason ? { id: '?', success: false, error: r.reason.message } : null));
+      }
+    }
+
+    const stats = await getProxyStats();
+    const allProxies = await getProxies();
+    let reEnabled = 0, disabled = 0, passed = 0;
+
+    for (const r of results) {
+      if (!r) continue;
+      if (!stats[r.id]) stats[r.id] = { total: 0, success: 0, failed: 0, totalLatency: 0, consecutiveFailures: 0 };
+      stats[r.id].total++;
+      if (r.success) {
+        stats[r.id].success++;
+        stats[r.id].consecutiveFailures = 0;
+        passed++;
+      } else {
+        stats[r.id].failed++;
+        stats[r.id].consecutiveFailures = (stats[r.id].consecutiveFailures || 0) + 1;
+      }
+      if (r.latency) stats[r.id].totalLatency += r.latency;
+      stats[r.id].avgLatency = Math.round(stats[r.id].totalLatency / stats[r.id].total);
+      stats[r.id].successRate = Math.round((stats[r.id].success / stats[r.id].total) * 100);
+
+      const pIdx = allProxies.findIndex(p => p.id === r.id);
+      if (pIdx === -1) continue;
+
+      allProxies[pIdx].lastTested = Date.now();
+      allProxies[pIdx].latency = r.latency;
+
+      // Re-enable disabled proxies that pass test
+      if (!allProxies[pIdx].enabled && r.success) {
+        allProxies[pIdx].enabled = true;
+        allProxies[pIdx].disabledReason = null;
+        allProxies[pIdx].disabledAt = null;
+        console.log(`[Admin] Proxy "${allProxies[pIdx].name}" RE-ENABLED (health check passed, latency: ${r.latency}ms)`);
+        reEnabled++;
+      }
+
+      // Auto-disable proxies with consistently low success rate
+      if (stats[r.id].total >= 5 && stats[r.id].successRate < 30 && allProxies[pIdx].enabled) {
+        allProxies[pIdx].enabled = false;
+        allProxies[pIdx].disabledReason = `Low success rate: ${stats[r.id].successRate}% (${stats[r.id].consecutiveFailures} consecutive failures)`;
+        allProxies[pIdx].disabledAt = Date.now();
+        console.log(`[Admin] Proxy "${allProxies[pIdx].name}" auto-disabled: success rate ${stats[r.id].successRate}%`);
+        disabled++;
+      }
+    }
+
+    await saveProxyStats(stats);
+    await saveProxies(allProxies);
+
+    const nextIndex = (lastIndex + HEALTH_CHECK_BATCH) % proxies.length;
+    await redisClient.set('config:proxyHealthIndex', nextIndex.toString());
+
+    console.log(`[Admin] Health check done: ${passed}/${results.length} passed, ${reEnabled} re-enabled, ${disabled} disabled`);
+  } catch (e) {
+    console.error('[Admin] Health check error:', e.message);
+  }
+}
+
+setInterval(runProxyHealthCheck, HEALTH_CHECK_INTERVAL);
+setTimeout(runProxyHealthCheck, 5000);
+
+// ========== COOKIES MANAGEMENT ==========
+app.get('/api/cookies', requireAuth, async (req, res) => {
+  try {
+    const content = await redisClient.get('config:cookies');
+    let validation = null;
+    if (content) {
+      const hasSID = content.includes('SID') && !content.includes('__Secure-3PSID');
+      const hasSAPISID = content.includes('SAPISID') || content.includes('__Secure-1PAPISID');
+      const hasLoginCookie = content.includes('SSID') || content.includes('HSID') || content.includes('__Secure-1PSID');
+      const hasSOCS = content.includes('SOCS');
+      const isValid = hasLoginCookie || hasSAPISID;
+      validation = {
+        hasAuth: isValid,
+        hasSID: content.includes('\tSID\t') || content.includes('\t__Secure-3PSID\t'),
+        hasSAPISID,
+        hasLoginCookie,
+        hasSOCS,
+        lineCount: content.split('\n').filter(l => l.trim() && !l.startsWith('#')).length,
+        detail: isValid
+          ? 'Cookies contain authentication tokens'
+          : hasSOCS
+            ? 'Only consent cookies found (SOCS). You need cookies from a LOGGED IN YouTube session.'
+            : 'No authentication cookies found. Export cookies while logged in to YouTube.',
+      };
+    }
+    res.json({
+      exists: !!content,
+      size: content ? content.length : 0,
+      preview: content ? content.split('\n').slice(0, 5).join('\n') : null,
+      lines: content ? content.split('\n').length : 0,
+      validation,
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to check cookies' });
+  }
+});
+
+app.post('/api/cookies', requireAuth, async (req, res) => {
+  try {
+    const { content } = req.body;
+    if (!content) return res.status(400).json({ error: 'Content is required' });
+    if (!content.includes('Netscape') && !content.includes('# HTTP Cookie File')) {
+      return res.status(400).json({ error: 'Invalid cookies file. Export cookies in Netscape format from your browser.' });
+    }
+    await redisClient.set('config:cookies', content);
+    console.log('[Admin] Cookies uploaded (' + content.length + ' bytes, ' + content.split('\n').length + ' lines)');
+    res.json({ success: true, size: content.length, lines: content.split('\n').length });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to save cookies' });
+  }
+});
+
+app.delete('/api/cookies', requireAuth, async (req, res) => {
+  try {
+    await redisClient.del('config:cookies');
+    console.log('[Admin] Cookies deleted');
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to delete cookies' });
+  }
+});
+
+// ========== LOG BUFFER ENDPOINT ==========
+app.get('/api/logs', requireAuth, async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 200;
+    const source = req.query.source || '';
+    const level = req.query.level || '';
+    let buffer = await redisClient.lrange(LOG_BUFFER_KEY, -limit, -1);
+
+    if (source || level) {
+      buffer = buffer.filter(line => {
+        try {
+          const parsed = JSON.parse(line);
+          if (source && parsed.s !== source) return false;
+          if (level && parsed.l !== level) return false;
+          return true;
+        } catch (e) { return true; }
+      });
+    }
+
+    res.json({ logs: buffer });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to get logs' });
+  }
+});
+
+// ========== START SERVER ==========
 setInterval(recordHistory, 30000);
 recordHistory();
 
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`[Admin] Server running on port ${PORT}`);
+  console.log(`[Admin] WebSocket available for log streaming`);
   console.log(`[Admin] Redis: ${REDIS_HOST}:${REDIS_PORT}`);
   console.log(`[Admin] Default login: ${ADMIN_USER} / ${ADMIN_PASS}`);
 });

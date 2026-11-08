@@ -6,6 +6,7 @@
   <meta name="robots" content="noindex, nofollow">
   <title>Admin Panel – ytdownmp3.cloud</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://cdn.jsdelivr.net/npm/date-fns@3.6.0/cdn.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.min.js"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -71,12 +72,34 @@
     .tab:hover:not(.active) { color: #cbd5e1; }
     .tab-panel { display: none; }
     .tab-panel.active { display: block; }
+    .sortable { cursor: pointer; user-select: none; }
+    .sortable:hover { color: #3b82f6; }
+    .sort-arrow { font-size: 0.6rem; margin-left: 4px; }
     @media (max-width: 900px) { .chart-card, .map-card { grid-column: auto; } }
+    .console-line { padding:1px 0; }
+    .console-line .time { color:#4a5568; }
+    .console-line .source { font-weight:600; }
+    .console-line .source-api { color:#3b82f6; }
+    .console-line .source-worker { color:#a855f7; }
+    .console-line .source-admin { color:#22c55e; }
+    .console-line .msg { color:#cbd5e1; }
+    .console-line.error .msg { color:#fca5a5; }
+    .console-line.warn .msg { color:#fde047; }
+    .console-line.error { background:#1a0505; }
+    .console-line.warn { background:#1a1505; }
+    #consoleOutput::-webkit-scrollbar { width:8px; }
+    #consoleOutput::-webkit-scrollbar-track { background:#0a0e14; }
+    #consoleOutput::-webkit-scrollbar-thumb { background:#334155; border-radius:4px; }
+    #consoleOutput::-webkit-scrollbar-thumb:hover { background:#475569; }
   </style>
 </head>
 <body>
   <div class="header">
-    <h1>Admin Panel</h1>
+    <div style="display:flex;align-items:center;gap:12px;">
+      <img src="/logo-280.webp" alt="Logo" style="height:36px;width:36px;border-radius:6px;">
+      <h1>Admin Panel</h1>
+      <span id="headerVersion" style="font-size:0.7rem;color:#64748b;background:#334155;padding:2px 8px;border-radius:4px;"></span>
+    </div>
     <div class="status">
       <span class="dot" id="statusDot"></span>
       <span id="statusText">Connected</span>
@@ -93,6 +116,7 @@
       <button class="tab" onclick="showTab('jobs')">Jobs</button>
       <button class="tab" onclick="showTab('system')">System</button>
       <button class="tab" onclick="showTab('proxies')">Proxies</button>
+      <button class="tab" onclick="showTab('console')">Console</button>
       <button class="tab" onclick="showTab('settings')">Settings</button>
     </div>
 
@@ -168,13 +192,27 @@
 
     <div class="tab-panel" id="panel-visitors">
       <div class="card table-container">
-        <table><thead><tr><th>IP</th><th>Country</th><th>City</th><th>Visits</th><th>Session</th><th>User Agent</th><th>Last Seen</th></tr></thead><tbody id="visitorsTable"></tbody></table>
+        <table><thead><tr>
+          <th class="sortable" onclick="sortVisitors('ip')">IP <span class="sort-arrow" id="vsort-ip"></span></th>
+          <th class="sortable" onclick="sortVisitors('country')">Country <span class="sort-arrow" id="vsort-country"></span></th>
+          <th class="sortable" onclick="sortVisitors('city')">City <span class="sort-arrow" id="vsort-city"></span></th>
+          <th class="sortable" onclick="sortVisitors('visits')">Visits <span class="sort-arrow" id="vsort-visits"></span></th>
+          <th class="sortable" onclick="sortVisitors('sessionDuration')">Session <span class="sort-arrow" id="vsort-sessionDuration"></span></th>
+          <th>User Agent</th>
+          <th class="sortable" onclick="sortVisitors('lastSeen')">Last Seen <span class="sort-arrow" id="vsort-lastSeen"></span></th>
+        </tr></thead><tbody id="visitorsTable"></tbody></table>
       </div>
     </div>
 
     <div class="tab-panel" id="panel-jobs">
       <div class="card table-container">
-        <table><thead><tr><th>Job ID</th><th>Format</th><th>Status</th><th>Duration</th><th>Time</th></tr></thead><tbody id="jobsTable"></tbody></table>
+        <table><thead><tr>
+          <th>Job ID</th>
+          <th class="sortable" onclick="sortJobs('format')">Format <span class="sort-arrow" id="job-sort-format"></span></th>
+          <th class="sortable" onclick="sortJobs('status')">Status <span class="sort-arrow" id="job-sort-status"></span></th>
+          <th class="sortable" onclick="sortJobs('duration')">Duration <span class="sort-arrow" id="job-sort-duration"></span></th>
+          <th class="sortable" onclick="sortJobs('timestamp')">Time <span class="sort-arrow" id="job-sort-timestamp"></span></th>
+        </tr></thead><tbody id="jobsTable"></tbody></table>
       </div>
     </div>
 
@@ -192,6 +230,35 @@
           <h2>System Info</h2>
           <div id="sysInfoDetail"></div>
         </div>
+      </div>
+    </div>
+
+    <div class="tab-panel" id="panel-console">
+      <div class="card" style="padding:0;">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid #334155;">
+          <div style="display:flex;align-items:center;gap:12px;">
+            <h2 style="margin:0;">Live Console</h2>
+            <span id="consoleStatus" style="font-size:0.75rem;padding:2px 8px;border-radius:4px;background:#166534;color:#86efac;">Connected</span>
+            <span id="consoleCount" style="font-size:0.75rem;color:#64748b;">0 lines</span>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <select id="consoleSourceFilter" style="padding:6px 10px;border:1px solid #334155;border-radius:4px;background:#0f172a;color:#e2e8f0;font-size:0.8rem;" onchange="filterConsole()">
+              <option value="">All Sources</option>
+              <option value="api">API</option>
+              <option value="worker">Worker</option>
+              <option value="admin">Admin</option>
+            </select>
+            <select id="consoleLevelFilter" style="padding:6px 10px;border:1px solid #334155;border-radius:4px;background:#0f172a;color:#e2e8f0;font-size:0.8rem;" onchange="filterConsole()">
+              <option value="">All Levels</option>
+              <option value="info">Info</option>
+              <option value="warn">Warn</option>
+              <option value="error">Error</option>
+            </select>
+            <button class="refresh-btn" onclick="toggleConsolePause()" id="consolePauseBtn" style="padding:6px 12px;font-size:0.8rem;">Pause</button>
+            <button class="refresh-btn" onclick="clearConsole()" style="padding:6px 12px;font-size:0.8rem;background:#ef4444;">Clear</button>
+          </div>
+        </div>
+        <div id="consoleOutput" style="height:calc(100vh - 200px);min-height:400px;overflow-y:auto;background:#0a0e14;font-family:'JetBrains Mono','Fira Code',monospace;font-size:0.78rem;line-height:1.6;padding:12px 16px;white-space:pre-wrap;word-break:break-all;"></div>
       </div>
     </div>
 
@@ -236,6 +303,24 @@
       </div>
       
       <div class="card" style="margin-top: 20px;">
+        <h2>YouTube Cookies</h2>
+        <p style="font-size:0.8rem;color:#94a3b8;margin-bottom:12px;">Upload a cookies.txt file to bypass YouTube bot detection. Export from your browser using a cookie exporter extension (Netscape format).</p>
+        <div id="cookiesStatus" style="margin-bottom:12px;padding:12px;background:#0f172a;border-radius:8px;border:1px solid #334155;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span id="cookiesDot" class="service-dot stopped"></span>
+            <span id="cookiesInfo" style="font-size:0.85rem;">Loading...</span>
+          </div>
+        </div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;">
+          <input type="file" id="cookiesFileInput" accept=".txt,.cookie,.cookies" style="display:none;" onchange="handleCookiesFile(event)">
+          <button class="refresh-btn" onclick="document.getElementById('cookiesFileInput').click()" style="background:#3b82f6;">Upload cookies.txt</button>
+          <button class="refresh-btn" onclick="deleteCookies()" style="background:#ef4444;">Delete Cookies</button>
+          <button class="refresh-btn" onclick="loadCookiesStatus()">Refresh Status</button>
+        </div>
+        <p style="margin-top:8px;font-size:0.75rem;color:#64748b;">The cookies file will be shared with API and Worker containers automatically via Redis.</p>
+      </div>
+
+      <div class="card" style="margin-top: 20px;">
         <h2>Version Info</h2>
         <div style="display: flex; gap: 24px; align-items: center; flex-wrap: wrap;">
           <div>
@@ -255,7 +340,16 @@
           <button class="refresh-btn" onclick="importProxies()">Import</button>
         </div>
         <div class="table-container">
-          <table><thead><tr><th>Name</th><th>URL</th><th>Country</th><th>Status</th><th>Latency</th><th>Success Rate</th><th>Last Tested</th><th>Actions</th></tr></thead><tbody id="proxiesTable"></tbody></table>
+          <table><thead><tr>
+            <th class="sortable" onclick="sortProxies('name')">Name <span class="sort-arrow" id="sort-name"></span></th>
+            <th>URL</th>
+            <th class="sortable" onclick="sortProxies('country')">Country <span class="sort-arrow" id="sort-country"></span></th>
+            <th class="sortable" onclick="sortProxies('enabled')">Status <span class="sort-arrow" id="sort-enabled"></span></th>
+            <th class="sortable" onclick="sortProxies('latency')">Latency <span class="sort-arrow" id="sort-latency"></span></th>
+            <th class="sortable" onclick="sortProxies('successRate')">Success Rate <span class="sort-arrow" id="sort-successRate"></span></th>
+            <th class="sortable" onclick="sortProxies('lastTested')">Last Tested <span class="sort-arrow" id="sort-lastTested"></span></th>
+            <th>Actions</th>
+          </tr></thead><tbody id="proxiesTable"></tbody></table>
         </div>
       </div>
       
@@ -275,7 +369,7 @@
       </div>
       
       <!-- Add Proxy Modal -->
-      <div id="addProxyModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; display: flex; align-items: center; justify-content: center;">
+      <div id="addProxyModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center;">
         <div style="background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 24px; width: 100%; max-width: 500px;">
           <h3 style="margin-bottom: 16px;">Add New Proxy</h3>
           <div style="margin-bottom: 12px;">
@@ -298,7 +392,7 @@
       </div>
       
       <!-- Import Modal -->
-      <div id="importModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; display: flex; align-items: center; justify-content: center;">
+      <div id="importModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center;">
         <div style="background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 24px; width: 100%; max-width: 600px;">
           <h3 style="margin-bottom: 16px;">Import Proxies (JSON Array)</h3>
           <textarea id="importProxiesText" style="width:100%; height:200px; padding:12px; border:2px solid #334155; border-radius:6px; background:#0f172a; color:#fff; font-family:monospace; font-size:0.8rem;" placeholder='[{"url":"socks5://1.2.3.4:1080","name":"Proxy 1","country":"US","enabled":true}, ...]'></textarea>
@@ -315,11 +409,25 @@
     const colors = { red: '#ef4444', green: '#22c55e', yellow: '#eab308', blue: '#3b82f6', gray: '#64748b' };
     let charts = {};
     let lastData = null;
+    let proxySortField = 'name';
+    let proxySortDir = 1;
+    let jobSortField = 'timestamp';
+    let jobSortDir = -1;
+    let visitorSortField = 'lastSeen';
+    let visitorSortDir = -1;
 
     function formatBytes(b) { if (b===0) return '0 B'; const k=1024,s=['B','KB','MB','GB','TB'],i=Math.floor(Math.log(b)/Math.log(k)); return parseFloat((b/Math.pow(k,i)).toFixed(1))+' '+s[i]; }
     function formatUptime(s) { const d=Math.floor(s/86400),h=Math.floor((s%86400)/3600),m=Math.floor((s%3600)/60); return d+'d '+h+'h '+m+'m'; }
     function timeAgo(ts) { const d=Date.now()-ts; if(d<60000) return 'just now'; if(d<3600000) return Math.floor(d/60000)+'m ago'; if(d<86400000) return Math.floor(d/3600000)+'h ago'; return Math.floor(d/86400000)+'d ago'; }
     function usageColor(p) { return p>80?'fill-red':p>60?'fill-yellow':'fill-green'; }
+
+    async function loadHeaderVersion() {
+      try {
+        const r = await fetch('/api/version');
+        const d = await r.json();
+        document.getElementById('headerVersion').textContent = 'v' + (d.version || '1.12');
+      } catch(e) {}
+    }
 
     async function loadStats() {
       try {
@@ -390,17 +498,29 @@
       `).join('');
 
       document.getElementById('sysInfo').innerHTML = `
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
           <div><strong>Hostname:</strong> ${d.system.hostname}</div>
           <div><strong>Platform:</strong> ${d.system.platform} (${d.system.arch})</div>
-          <div><strong>CPU:</strong> ${d.system.cpu.cores} cores</div>
+          <div><strong>OS:</strong> ${d.system.distro || 'Linux'}</div>
+          <div><strong>CPU Model:</strong> ${d.system.cpu.model}</div>
+          <div><strong>CPU Cores:</strong> ${d.system.cpu.cores} (${d.system.cpu.threads} threads)</div>
+          <div><strong>CPU Speed:</strong> ${d.system.cpu.speed} MHz</div>
+          ${d.system.cpu.temperature ? `<div><strong>CPU Temp:</strong> ${d.system.cpu.temperature}</div>` : ''}
           <div><strong>Uptime:</strong> ${formatUptime(d.system.uptime)}</div>
         </div>
       `;
     }
 
     function renderVisitors(d) {
-      document.getElementById('visitorsTable').innerHTML = d.visitors.list.slice().sort((a,b)=>b.lastSeen-a.lastSeen).map(v => `
+      let visitors = [...(d.visitors.list || [])];
+      visitors.sort((a, b) => {
+        let va = a[visitorSortField], vb = b[visitorSortField];
+        if (visitorSortField === 'visits' || visitorSortField === 'lastSeen' || visitorSortField === 'firstSeen') { va = va || 0; vb = vb || 0; }
+        if (visitorSortField === 'sessionDuration') { va = parseFloat(va) || 0; vb = parseFloat(vb) || 0; }
+        if (typeof va === 'string') return va.localeCompare(vb) * visitorSortDir;
+        return ((va || 0) - (vb || 0)) * visitorSortDir;
+      });
+      document.getElementById('visitorsTable').innerHTML = visitors.map(v => `
         <tr>
           <td><code>${v.ip}</code></td>
           <td><span class="flag" style="background-image:url('https://flagcdn.com/20x15/${v.country?.toLowerCase()}.png')">${v.country||'Unknown'}</span></td>
@@ -419,24 +539,54 @@
       });
     }
 
+    function sortVisitors(field) {
+      if (visitorSortField === field) visitorSortDir *= -1;
+      else { visitorSortField = field; visitorSortDir = field === 'lastSeen' ? -1 : 1; }
+      document.querySelectorAll('#panel-visitors .sort-arrow').forEach(el => el.textContent = '');
+      const arrow = document.getElementById('vsort-' + field);
+      if (arrow) arrow.textContent = visitorSortDir === 1 ? '▲' : '▼';
+      if (lastData) renderVisitors(lastData);
+    }
+
     function renderJobs(d) {
-      document.getElementById('jobsTable').innerHTML = d.queue.jobHistory.map(j => {
-        const status = j.status || 'unknown';
-        const statusClass = status === 'completed' ? 'badge-green' : 
-                           status === 'active' ? 'badge-blue' : 
-                           status === 'waiting' ? 'badge-yellow' : 
-                           status === 'failed' ? 'badge-red' : 
-                           status === 'delayed' ? 'badge-purple' : 'badge-gray';
+      let jobs = [...(d.queue.jobHistory || [])];
+      jobs.sort((a, b) => {
+        let va = a[jobSortField], vb = b[jobSortField];
+        if (jobSortField === 'duration') { va = va || 0; vb = vb || 0; }
+        if (jobSortField === 'timestamp') { va = va || 0; vb = vb || 0; }
+        if (typeof va === 'string') return va.localeCompare(vb) * jobSortDir;
+        return ((va || 0) - (vb || 0)) * jobSortDir;
+      });
+      document.getElementById('jobsTable').innerHTML = jobs.map(j => {
+        let status = j.status || 'unknown';
+        let statusClass, statusLabel;
+        if (status === 'completed') { statusClass = 'badge-green'; statusLabel = 'Completed'; }
+        else if (status === 'active') { statusClass = 'badge-blue'; statusLabel = 'Active'; }
+        else if (status === 'waiting') { statusClass = 'badge-yellow'; statusLabel = 'Waiting'; }
+        else if (status === 'failed') { statusClass = 'badge-red'; statusLabel = 'Failed'; }
+        else if (status === 'delayed') { statusClass = 'badge-yellow'; statusLabel = 'Delayed'; }
+        else { statusClass = 'badge-gray'; statusLabel = status; }
         return `
           <tr>
             <td><code>${j.jobId?.slice(0,8)||j.id}</code></td>
             <td><span class="badge badge-blue">${(j.format||'mp3').toUpperCase()}</span></td>
-            <td><span class="badge ${statusClass}">${status}</span></td>
+            <td><span class="badge ${statusClass}">${statusLabel}</span></td>
             <td>${j.duration?(j.duration/1000).toFixed(1)+'s':'-'}</td>
             <td>${timeAgo(j.timestamp)}</td>
           </tr>
         `;
       }).join('') || '<tr><td colspan="5" style="color:#64748b">No recent jobs</td></tr>';
+    }
+
+    function sortJobs(field) {
+      if (jobSortField === field) jobSortDir *= -1;
+      else { jobSortField = field; jobSortDir = -1; }
+      document.querySelectorAll('#panel-jobs .sort-arrow').forEach(el => el.textContent = '');
+      const arrows = document.querySelectorAll('#panel-jobs .sort-arrow');
+      arrows.forEach(el => {
+        if (el.id === 'job-sort-' + field) el.textContent = jobSortDir === 1 ? '▲' : '▼';
+      });
+      if (lastData) renderJobs(lastData);
     }
 
     function renderSystem(d) {
@@ -455,10 +605,18 @@
       `).join('');
 
       document.getElementById('sysInfoDetail').innerHTML = `
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
           <div><strong>Hostname:</strong> ${d.system.hostname}</div>
           <div><strong>Platform:</strong> ${d.system.platform} (${d.system.arch})</div>
-          <div><strong>CPU:</strong> ${d.system.cpu.cores} cores</div>
+          <div><strong>OS:</strong> ${d.system.distro || 'Linux'}</div>
+          <div><strong>CPU Model:</strong> ${d.system.cpu.model}</div>
+          <div><strong>CPU Cores:</strong> ${d.system.cpu.cores} (${d.system.cpu.threads} threads)</div>
+          <div><strong>CPU Speed:</strong> ${d.system.cpu.speed} MHz</div>
+          ${d.system.cpu.temperature ? `<div><strong>CPU Temp:</strong> ${d.system.cpu.temperature}</div>` : ''}
+          <div><strong>RAM:</strong> ${formatBytes(d.system.memory.used)} / ${formatBytes(d.system.memory.total)} (${d.system.memory.usagePercent}%)</div>
+          <div><strong>SWAP:</strong> ${formatBytes(d.system.swap.used)} / ${formatBytes(d.system.swap.total)}</div>
+          <div><strong>Disk:</strong> ${formatBytes(d.system.disk.used)} / ${formatBytes(d.system.disk.total)}</div>
+          <div><strong>Load Avg:</strong> ${d.system.loadAvg.join(' / ')}</div>
           <div><strong>Uptime:</strong> ${formatUptime(d.system.uptime)}</div>
         </div>
       `;
@@ -466,6 +624,10 @@
 
     function destroyCharts() {
       Object.values(charts).forEach(c => { if (c && typeof c.destroy === 'function') c.destroy(); });
+      document.querySelectorAll('canvas[id$="Chart"]').forEach(c => {
+        const existing = Chart.getChart(c);
+        if (existing) existing.destroy();
+      });
       charts = {};
     }
 
@@ -474,40 +636,44 @@
       const opts = {
         responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false } },
-        scales: { x: { type: 'linear', grid: { color: '#334155' }, ticks: { color: '#94a3b8' } }, y: { beginAtZero: true, max: 100, grid: { color: '#334155' }, ticks: { color: '#94a3b8' } } }
+        scales: {
+          x: { type: 'time', time: { unit: 'minute', displayFormats: { minute: 'HH:mm' }, tooltipFormat: 'HH:mm:ss' }, grid: { color: '#334155' }, ticks: { color: '#94a3b8', maxTicksLimit: 8 } },
+          y: { beginAtZero: true, max: 100, grid: { color: '#334155' }, ticks: { color: '#94a3b8' } }
+        }
       };
 
-      const createChart = (id, label, color, data) => {
+      const createChart = (id, label, color, data, maxVal) => {
         const ctx = document.getElementById(id).getContext('2d');
         if (charts[id]) charts[id].destroy();
-        return new Chart(ctx, { type: 'line', data: { datasets: [{ label, data: data.map((v,i)=>({x:i,y:v})), borderColor: color, backgroundColor: color + '33', tension: 0.3, fill: true, pointRadius: 0 }] }, options: opts });
+        const yOpts = maxVal ? { ...opts.scales, y: { beginAtZero: true, max: maxVal, grid: { color: '#334155' }, ticks: { color: '#94a3b8' } } } : opts.scales;
+        return new Chart(ctx, { type: 'line', data: { datasets: [{ label, data: data.map(v => ({ x: v.time || 0, y: parseFloat(v.value) || 0 })), borderColor: color, backgroundColor: color + '33', tension: 0.3, fill: true, pointRadius: 0 }] }, options: { ...opts, scales: yOpts } });
       };
 
-      charts.cpu = createChart('cpuChart', 'CPU %', colors.blue, d.history.cpu);
-      charts.mem = createChart('memChart', 'Memory %', colors.green, d.history.memory);
+      charts.cpu = createChart('cpuChart', 'CPU %', colors.blue, d.history.cpu, 100);
+      charts.mem = createChart('memChart', 'Memory %', colors.green, d.history.memory, 100);
       charts.net = (() => {
         const ctx = document.getElementById('netChart').getContext('2d');
         if (charts.net) charts.net.destroy();
         return new Chart(ctx, {
           type: 'line', data: { datasets: [
-            { label: 'RX', data: d.history.network.map((p,i)=>({x:i,y:p.rx})), borderColor: colors.green, backgroundColor: colors.green+'33', tension: 0.3, fill: true, pointRadius: 0 },
-            { label: 'TX', data: d.history.network.map((p,i)=>({x:i,y:p.tx})), borderColor: colors.red, backgroundColor: colors.red+'33', tension: 0.3, fill: true, pointRadius: 0 }
-          ]}, options: { ...opts, scales: { ...opts.scales, y: { beginAtZero: true, grid: { color: '#334155' }, ticks: { color: '#94a3b8' } } } } });
+            { label: 'RX', data: d.history.network.map(p => ({ x: p.time || 0, y: p.rx || 0 })), borderColor: colors.green, backgroundColor: colors.green+'33', tension: 0.3, fill: true, pointRadius: 0 },
+            { label: 'TX', data: d.history.network.map(p => ({ x: p.time || 0, y: p.tx || 0 })), borderColor: colors.red, backgroundColor: colors.red+'33', tension: 0.3, fill: true, pointRadius: 0 }
+          ]}, options: { ...opts, plugins: { legend: { display: true, labels: { color: '#94a3b8' } } }, scales: { ...opts.scales, y: { beginAtZero: true, grid: { color: '#334155' }, ticks: { color: '#94a3b8' } } } } });
       })();
       charts.queue = createChart('queueChart', 'Active Jobs', colors.yellow, d.history.queue);
-      charts.visitors = createChart('visitorsChart', 'Visitors', colors.blue, d.history.visitors);
-      charts.disk = createChart('diskChart', 'Disk %', colors.gray, d.history.disk);
+      charts.visitors = createChart('visitorsChart', 'Visitors', colors.blue, d.history.visitors.map(v => ({ time: v.time, value: v.count || 0 })));
+      charts.disk = createChart('diskChart', 'Disk %', colors.gray, d.history.disk, 100);
     }
 
     function renderCharts(d) {
       if (Object.keys(charts).length === 0) return initCharts(d);
-      charts.cpu.data.datasets[0].data = d.history.cpu;
-      charts.mem.data.datasets[0].data = d.history.memory;
-      charts.net.data.datasets[0].data = d.history.network.map(p=>({x:p.time,y:p.rx}));
-      charts.net.data.datasets[1].data = d.history.network.map(p=>({x:p.time,y:p.tx}));
-      charts.queue.data.datasets[0].data = d.history.queue;
-      charts.visitors.data.datasets[0].data = d.history.visitors;
-      charts.disk.data.datasets[0].data = d.history.disk;
+      charts.cpu.data.datasets[0].data = d.history.cpu.map(v => ({ x: v.time || 0, y: parseFloat(v.value) || 0 }));
+      charts.mem.data.datasets[0].data = d.history.memory.map(v => ({ x: v.time || 0, y: parseFloat(v.value) || 0 }));
+      charts.net.data.datasets[0].data = d.history.network.map(p => ({ x: p.time || 0, y: p.rx || 0 }));
+      charts.net.data.datasets[1].data = d.history.network.map(p => ({ x: p.time || 0, y: p.tx || 0 }));
+      charts.queue.data.datasets[0].data = d.history.queue.map(v => ({ x: v.time || 0, y: parseFloat(v.value) || 0 }));
+      charts.visitors.data.datasets[0].data = d.history.visitors.map(v => ({ x: v.time || 0, y: parseFloat(v.count || v.value) || 0 }));
+      charts.disk.data.datasets[0].data = d.history.disk.map(v => ({ x: v.time || 0, y: parseFloat(v.value) || 0 }));
       Object.values(charts).forEach(c => c.update('none'));
     }
 
@@ -586,6 +752,29 @@
       }
     }
 
+    function sortProxies(field) {
+      if (proxySortField === field) proxySortDir *= -1;
+      else { proxySortField = field; proxySortDir = 1; }
+      document.querySelectorAll('.sort-arrow').forEach(el => el.textContent = '');
+      const arrow = document.getElementById('sort-' + field);
+      if (arrow) arrow.textContent = proxySortDir === 1 ? '▲' : '▼';
+      if (proxiesData) {
+        const sorted = [...proxiesData.proxies].sort((a, b) => {
+          let va = a[field], vb = b[field];
+          if (field === 'successRate') {
+            const sa = proxiesData.stats[a.id]?.successRate || 0;
+            const sb = proxiesData.stats[b.id]?.successRate || 0;
+            va = sa; vb = sb;
+          }
+          if (va == null) va = field === 'lastTested' ? 0 : field === 'latency' ? Infinity : '';
+          if (vb == null) vb = field === 'lastTested' ? 0 : field === 'latency' ? Infinity : '';
+          if (typeof va === 'string') return va.localeCompare(vb) * proxySortDir;
+          return (va - vb) * proxySortDir;
+        });
+        renderProxies(sorted, proxiesData.stats);
+      }
+    }
+
     function renderProxies(proxies, stats) {
       const tbody = document.getElementById('proxiesTable');
       if (!proxies || proxies.length === 0) {
@@ -600,7 +789,7 @@
           <tr>
             <td><strong>${p.name}</strong></td>
             <td style="font-family:monospace;font-size:0.75rem;">${p.url}</td>
-            <td>${p.country}</td>
+            <td><img src="https://flagcdn.com/20x15/${(p.country||'').toLowerCase()}.png" style="vertical-align:middle;margin-right:4px;" onerror="this.style.display='none'"> ${p.country||'Unknown'}</td>
             <td><span class="service-dot ${statusClass}"></span> ${statusText}</td>
             <td>${p.latency ? p.latency + 'ms' : '-'}</td>
             <td>${s.total > 0 ? s.successRate + '%' : '-'}</td>
@@ -642,7 +831,8 @@
       try {
         const r = await fetch('/api/proxies/test-all', { method: 'POST' });
         const d = await r.json();
-        alert(`Tested ${d.results.length} proxies. ${d.results.filter(r => r.success).length} passed.`);
+        const passed = d.results.filter(r => r.success).length;
+        alert(`Tested ${d.results.length} proxies. ${passed} passed, ${d.results.length - passed} failed.`);
         loadProxies();
       } catch (e) {
         alert('Test failed: ' + e.message);
@@ -777,59 +967,6 @@
       showImportModal();
     }
 
-    function closeImportModal() {
-      document.getElementById('importModal').style.display = 'none';
-    }
-
-    async function testAllProxies() {
-      const btn = event.target;
-      btn.disabled = true;
-      btn.textContent = 'Testing...';
-      try {
-        const r = await fetch('/api/proxies/test-all', { method: 'POST' });
-        const d = await r.json();
-        const passed = d.results.filter(r => r.success).length;
-        alert(`Tested ${d.results.length} proxies. ${passed} passed.`);
-        loadProxies();
-      } catch (e) {
-        alert('Test failed: ' + e.message);
-      }
-      btn.disabled = false;
-      btn.textContent = 'Test All';
-    }
-
-    async function importProxies() {
-      showImportModal();
-    }
-
-    async function saveRotationStrategy() {
-      const strategy = document.getElementById('rotationStrategy').value;
-      try {
-        const r = await fetch('/api/proxies/rotation', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ strategy })
-        });
-        if (r.ok) {
-          alert('Rotation strategy updated');
-        } else {
-          alert('Failed to save');
-        }
-      } catch (e) {
-        alert('Error: ' + e.message);
-      }
-    }
-
-    async function testNextProxy() {
-      try {
-        const r = await fetch('/api/proxies/next');
-        const d = await r.json();
-        document.getElementById('nextProxyInfo').textContent = d.proxy ? `Next: ${d.proxy.name} (${d.proxy.url})` : 'No proxies available';
-      } catch (e) {
-        alert('Error: ' + e.message);
-      }
-    }
-
     // ========== VERSION & LOGO MANAGEMENT ==========
     async function loadVersion() {
       try {
@@ -899,7 +1036,180 @@
     loadStats();
     loadProgressBarSetting();
     loadVersion();
+    loadHeaderVersion();
     setInterval(loadStats, 5000);
+
+    // ========== WEBSOCKET CONSOLE ==========
+    let ws = null;
+    let consolePaused = false;
+    let consoleLines = [];
+    let consoleFilter = { source: '', level: '' };
+    const MAX_CONSOLE_LINES = 2000;
+
+    function connectWebSocket() {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${proto}//${location.host}`);
+
+      ws.onopen = () => {
+        document.getElementById('consoleStatus').textContent = 'Connected';
+        document.getElementById('consoleStatus').style.background = '#166534';
+        document.getElementById('consoleStatus').style.color = '#86efac';
+      };
+
+      ws.onmessage = (event) => {
+        if (consolePaused) return;
+        try {
+          const parsed = JSON.parse(event.data);
+          addConsoleLine(parsed);
+        } catch (e) {
+          addConsoleLine({ t: Date.now(), l: 'info', s: 'unknown', m: event.data });
+        }
+      };
+
+      ws.onclose = () => {
+        document.getElementById('consoleStatus').textContent = 'Disconnected';
+        document.getElementById('consoleStatus').style.background = '#991b1b';
+        document.getElementById('consoleStatus').style.color = '#fca5a5';
+        setTimeout(connectWebSocket, 3000);
+      };
+
+      ws.onerror = () => {
+        document.getElementById('consoleStatus').textContent = 'Error';
+        document.getElementById('consoleStatus').style.background = '#991b1b';
+      };
+    }
+
+    function addConsoleLine(parsed) {
+      const line = { time: parsed.t, level: parsed.l, source: parsed.s, msg: parsed.m };
+      consoleLines.push(line);
+      if (consoleLines.length > MAX_CONSOLE_LINES) consoleLines = consoleLines.slice(-MAX_CONSOLE_LINES);
+      if (!shouldFilterLine(line)) renderConsoleLine(line);
+      document.getElementById('consoleCount').textContent = consoleLines.length + ' lines';
+    }
+
+    function shouldFilterLine(line) {
+      if (consoleFilter.source && line.source !== consoleFilter.source) return true;
+      if (consoleFilter.level && line.level !== consoleFilter.level) return true;
+      return false;
+    }
+
+    function renderConsoleLine(line) {
+      const el = document.getElementById('consoleOutput');
+      const div = document.createElement('div');
+      div.className = 'console-line ' + (line.level || '');
+      const time = new Date(line.time).toLocaleTimeString('es-ES', { hour12: false });
+      const sourceClass = 'source-' + (line.source || 'unknown');
+      div.innerHTML = `<span class="time">${time}</span> <span class="source ${sourceClass}">[${(line.source || '?').toUpperCase()}]</span> <span class="msg">${escapeHtml(line.msg || '')}</span>`;
+      el.appendChild(div);
+      if (el.children.length > MAX_CONSOLE_LINES) el.removeChild(el.firstChild);
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    function filterConsole() {
+      consoleFilter.source = document.getElementById('consoleSourceFilter').value;
+      consoleFilter.level = document.getElementById('consoleLevelFilter').value;
+      document.getElementById('consoleOutput').innerHTML = '';
+      consoleLines.forEach(line => {
+        if (!shouldFilterLine(line)) renderConsoleLine(line);
+      });
+    }
+
+    function toggleConsolePause() {
+      consolePaused = !consolePaused;
+      document.getElementById('consolePauseBtn').textContent = consolePaused ? 'Resume' : 'Pause';
+      document.getElementById('consolePauseBtn').style.background = consolePaused ? '#22c55e' : '#3b82f6';
+      if (!consolePaused) {
+        document.getElementById('consoleOutput').innerHTML = '';
+        consoleLines.forEach(line => renderConsoleLine(line));
+      }
+    }
+
+    function clearConsole() {
+      consoleLines = [];
+      document.getElementById('consoleOutput').innerHTML = '';
+      document.getElementById('consoleCount').textContent = '0 lines';
+    }
+
+    connectWebSocket();
+
+    // ========== COOKIES MANAGEMENT ==========
+    async function loadCookiesStatus() {
+      try {
+        const r = await fetch('/api/cookies');
+        const d = await r.json();
+        const dot = document.getElementById('cookiesDot');
+        const info = document.getElementById('cookiesInfo');
+        if (d.exists) {
+          const v = d.validation;
+          if (v && v.hasAuth) {
+            dot.className = 'service-dot running';
+            info.innerHTML = `<span style="color:#22c55e">Active &amp; Valid</span> — ${v.lineCount} cookies, ${(d.size/1024).toFixed(1)} KB — Auth tokens found`;
+          } else if (v) {
+            dot.className = 'service-dot warning';
+            info.innerHTML = `<span style="color:#eab308">Invalid</span> — ${(d.size/1024).toFixed(1)} KB — ${v.detail}`;
+          } else {
+            dot.className = 'service-dot running';
+            info.innerHTML = `<span style="color:#22c55e">Uploaded</span> — ${(d.size/1024).toFixed(1)} KB`;
+          }
+        } else {
+          dot.className = 'service-dot stopped';
+          info.innerHTML = `<span style="color:#ef4444">Not configured</span> — Upload a cookies.txt file to enable YouTube access`;
+        }
+      } catch (e) {
+        document.getElementById('cookiesInfo').textContent = 'Error checking status';
+      }
+    }
+
+    async function handleCookiesFile(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const content = await file.text();
+      try {
+        const r = await fetch('/api/cookies', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content })
+        });
+        const d = await r.json();
+        if (d.success) {
+          alert(`Cookies uploaded! ${d.lines} lines, ${(d.size/1024).toFixed(1)} KB`);
+          loadCookiesStatus();
+        } else {
+          alert('Error: ' + d.error);
+        }
+      } catch (e) {
+        alert('Upload failed: ' + e.message);
+      }
+      event.target.value = '';
+    }
+
+    async function deleteCookies() {
+      if (!confirm('Delete cookies file? All services will lose YouTube authentication.')) return;
+      try {
+        const r = await fetch('/api/cookies', { method: 'DELETE' });
+        const d = await r.json();
+        if (d.success) {
+          alert('Cookies deleted');
+          loadCookiesStatus();
+        }
+      } catch (e) {
+        alert('Delete failed: ' + e.message);
+      }
+    }
+
+    // Load cookies status when settings tab is opened
+    const origShowTab = window.showTab;
+    window.showTab = function(name) {
+      origShowTab(name);
+      if (name === 'settings') loadCookiesStatus();
+      if (name === 'console') {
+        document.getElementById('consoleOutput').scrollTop = document.getElementById('consoleOutput').scrollHeight;
+      }
+    };
   </script>
 </body>
 </html>

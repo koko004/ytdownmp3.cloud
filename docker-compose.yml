@@ -12,16 +12,18 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
 
   api:
     image: koko004/ytdownmp3-api:latest
     restart: unless-stopped
-    ports:
-      - "8080:3000"
+    network_mode: host
     environment:
-      - REDIS_HOST=redis
+      - REDIS_HOST=127.0.0.1
       - REDIS_PORT=6379
       - DOWNLOADS_DIR=/app/downloads
+      - PORT=8081
     volumes:
       - downloads:/app/downloads
     depends_on:
@@ -33,16 +35,17 @@ services:
   worker:
     image: koko004/ytdownmp3-worker:latest
     restart: unless-stopped
+    network_mode: host
     environment:
-      - REDIS_HOST=redis
+      - REDIS_HOST=127.0.0.1
       - REDIS_PORT=6379
       - DOWNLOADS_DIR=/app/downloads
       - WORKER_CONCURRENCY=2
       - JOB_TIMEOUT=120000
-      - COOKIES_FILE=/app/cookies.txt
+      - ADMIN_URL=http://127.0.0.1:4000
+      - HEALTH_PORT=3001
     volumes:
       - downloads:/app/downloads
-      - ./cookies.txt:/app/cookies.txt:ro
     depends_on:
       redis:
         condition: service_healthy
@@ -62,10 +65,9 @@ services:
   admin:
     image: koko004/ytdownmp3-admin:latest
     restart: unless-stopped
-    ports:
-      - "4000:4000"
+    network_mode: host
     environment:
-      - REDIS_HOST=redis
+      - REDIS_HOST=127.0.0.1
       - REDIS_PORT=6379
       - ADMIN_USER=admin
       - ADMIN_PASS=changeme123
@@ -76,21 +78,24 @@ services:
       - com.centurylinklabs.watchtower.enable=true
 
   watchtower:
-    image: containrrr/watchtower
+    image: containrrr/watchtower:latest-dev
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - WATCHTOWER_CLEANUP=true
       - WATCHTOWER_REVIVE_STOPPED=true
-      - WATCHTOWER_POLL_INTERVAL=21600
+      - WATCHTOWER_INTERVAL=21600
       - WATCHTOWER_LABEL_ENABLE=true
       - WATCHTOWER_INCLUDE_STOPPED=true
     command: >
+      --api-version 1.55
       --label-enable
       --cleanup
       --revive-stopped
-      --poll-interval 21600
+      --interval 21600
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
 
 volumes:
   redis-data:

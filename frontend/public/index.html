@@ -75,12 +75,12 @@
     .container {
       max-width: 700px;
       margin: 0 auto;
-      padding: 40px 20px;
+      padding: 10px 20px;
     }
 
     header {
       text-align: center;
-      margin-bottom: 50px;
+      margin-bottom: 20px;
     }
 
     .logo {
@@ -94,13 +94,19 @@
     }
 
     .logo-img {
-      max-width: 280px;
+      max-width: 196px;
       height: auto;
     }
 
     .subtitle {
       color: #8892b0;
       font-size: 1.1rem;
+    }
+
+    .credit {
+      color: #495670;
+      font-size: 0.75rem;
+      margin-top: 4px;
     }
 
     .converter-box {
@@ -357,7 +363,7 @@
       font-weight: 800;
       color: #fff;
       margin-bottom: 15px;
-      text-shadow: 0 0 20px rgba(247, 118, 142, 0.6), 0 0 40px rgba(247, 118, 142, 0.2);
+      text-shadow: 0 0 20px rgba(214, 56, 81, 0.6), 0 0 40px rgba(214, 56, 81, 0.2);
       display: flex;
       align-items: baseline;
       justify-content: center;
@@ -365,7 +371,7 @@
 
     .striped-percent-sign {
       font-size: 1.8rem;
-      color: #f7768e;
+      color: #d63851;
       margin-left: 4px;
     }
 
@@ -383,7 +389,7 @@
       height: 100%;
       width: 0%;
       border-radius: 10px;
-      background-color: #f7768e;
+      background-color: #d63851;
       background-image: linear-gradient(
         45deg,
         rgba(255, 255, 255, 0.2) 25%,
@@ -543,7 +549,7 @@
 <body>
   <div class="container">
     <header>
-      <img src="/logo-280.webp" srcset="/logo-280.webp 280w, /logo.webp 560w" sizes="280px" alt="ytdownmp3.cloud" class="logo-img" width="280" height="280" fetchpriority="high">
+      <img src="/logo-280.webp" srcset="/logo-280.webp 280w, /logo.webp 560w" sizes="196px" alt="ytdownmp3.cloud" class="logo-img" width="196" height="196" fetchpriority="high">
       <p class="subtitle">Convert and download YouTube videos as MP3</p>
     </header>
 
@@ -555,10 +561,10 @@
       </div>
 
       <div class="format-selector">
-        <button class="format-btn active" data-format="mp3" onclick="selectFormat('mp3')">MP3 (Audio)</button>
-        <!-- MP4 BUTTON - Uncomment to re-enable
-        <button class="format-btn" data-format="mp4" onclick="selectFormat('mp4')">MP4 (Video)</button>
-        -->
+        <button class="format-btn active" data-format="mp3" onclick="selectFormat('mp3')">MP3</button>
+        <button class="format-btn" data-format="m4a" onclick="selectFormat('m4a')">M4A</button>
+        <button class="format-btn" data-format="opus" onclick="selectFormat('opus')">Opus</button>
+        <button class="format-btn" data-format="mp4" onclick="selectFormat('mp4')">MP4</button>
       </div>
 
       <button class="convert-btn" id="convertBtn" onclick="startConvert()">
@@ -606,15 +612,19 @@
 
     <footer>
       <p>No ads. No signup. Completely free.</p>
+      <p class="credit">Made with ❤️ by koko004</p>
     </footer>
   </div>
 
+  <script src="/ffmpeg/ffmpeg.js"></script>
   <script>
     const API_BASE = '/api';
     let selectedFormat = 'mp3';
     let currentJobId = null;
     let pollTimer = null;
     let progressBarType = 'bubble';
+    let ffmpegLoaded = false;
+    let ffmpegInstance = null;
 
     async function loadProgressBarSetting() {
       try {
@@ -704,6 +714,42 @@
       }
     }
 
+    async function initFFmpeg() {
+      if (ffmpegLoaded) return ffmpegInstance;
+      try {
+        const { FFmpeg } = FFmpegWASM;
+        ffmpegInstance = new FFmpeg();
+        ffmpegInstance.on('progress', ({ progress }) => {
+          const pct = 55 + Math.round(progress * 45);
+          updateBubble(pct, 'converting');
+          updateStripedBar(pct, 'converting');
+        });
+        updateBubble(55, 'loading converter');
+        updateStripedBar(55, 'loading converter');
+        document.getElementById('progressText').textContent = 'Loading audio converter...';
+        await ffmpegInstance.load({
+          coreURL: '/ffmpeg/ffmpeg-core.js',
+          wasmURL: '/ffmpeg/ffmpeg-core.wasm',
+          workerURL: '/ffmpeg/814.ffmpeg.js',
+        });
+        ffmpegLoaded = true;
+        return ffmpegInstance;
+      } catch (e) {
+        console.error('Failed to load ffmpeg.wasm:', e);
+        throw new Error('Failed to load audio converter. Try M4A/Opus instead.');
+      }
+    }
+
+    async function convertWithFFmpeg(inputData, inputName, outputName) {
+      const ffmpeg = await initFFmpeg();
+      await ffmpeg.writeFile(inputName, inputData);
+      await ffmpeg.exec(['-i', inputName, '-b:a', '192k', '-f', 'mp3', outputName]);
+      const outputData = await ffmpeg.readFile(outputName);
+      await ffmpeg.deleteFile(inputName);
+      await ffmpeg.deleteFile(outputName);
+      return outputData;
+    }
+
     async function startConvert() {
       const url = document.getElementById('urlInput').value.trim();
       if (!url) return showError('Please enter a YouTube link');
@@ -715,6 +761,14 @@
       resetUI();
       showProgressBar();
 
+      if (selectedFormat === 'mp4' || selectedFormat === 'mp3') {
+        await startServerSideConvert(url, btn);
+      } else {
+        await startClientSideDownload(url, btn);
+      }
+    }
+
+    async function startServerSideConvert(url, btn) {
       try {
         const res = await fetch(`${API_BASE}/convert`, {
           method: 'POST',
@@ -733,6 +787,91 @@
         btn.disabled = false;
         btn.textContent = 'Convert';
       }
+    }
+
+    async function startClientSideDownload(url, btn) {
+      try {
+        updateBubble(5, 'extracting');
+        updateStripedBar(5, 'extracting');
+        document.getElementById('progressContainer').classList.add('visible');
+        document.getElementById('progressText').textContent = 'Extracting audio stream...';
+
+        const streamRes = await fetch(`${API_BASE}/stream?url=${encodeURIComponent(url)}&format=${selectedFormat}`);
+        if (!streamRes.ok) {
+          const err = await streamRes.json();
+          throw new Error(err.error || 'Failed to extract audio');
+        }
+
+        updateBubble(20, 'downloading');
+        updateStripedBar(20, 'downloading');
+        document.getElementById('progressText').textContent = 'Downloading audio stream...';
+
+        const contentLength = parseInt(streamRes.headers.get('content-length') || '0', 10);
+        const reader = streamRes.body.getReader();
+        const chunks = [];
+        let received = 0;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          received += value.length;
+          if (contentLength > 0) {
+            const pct = 20 + Math.round((received / contentLength) * 30);
+            updateBubble(pct, 'downloading');
+            updateStripedBar(pct, 'downloading');
+            document.getElementById('progressText').textContent = `Downloading... ${Math.round(received / contentLength * 100)}%`;
+          }
+        }
+
+        const audioData = new Uint8Array(received);
+        let offset = 0;
+        for (const chunk of chunks) {
+          audioData.set(chunk, offset);
+          offset += chunk.length;
+        }
+
+        const videoTitle = streamRes.headers.get('x-video-title');
+        const safeName = videoTitle ? videoTitle.replace(/[^\w\s\-./()]/g, '').replace(/\s+/g, ' ').trim().slice(0, 100) || 'audio' : 'audio';
+
+        if (selectedFormat === 'mp3') {
+          updateBubble(55, 'converting');
+          updateStripedBar(55, 'converting');
+          document.getElementById('progressText').textContent = 'Converting to MP3...';
+
+          const ext = streamRes.headers.get('content-type')?.includes('webm') ? 'webm' : 'm4a';
+          const inputName = `input.${ext}`;
+          const outputName = 'output.mp3';
+
+          const mp3Data = await convertWithFFmpeg(audioData, inputName, outputName);
+          downloadBlob(mp3Data, `${safeName}.mp3`, 'audio/mpeg');
+        } else {
+          const mimeTypes = { 'm4a': 'audio/mp4', 'opus': 'audio/webm' };
+          downloadBlob(audioData, `${safeName}.${selectedFormat}`, mimeTypes[selectedFormat] || 'application/octet-stream');
+        }
+
+        updateBubble(100, 'done');
+        updateStripedBar(100, 'done');
+        document.getElementById('progressText').textContent = 'Download complete!';
+        btn.disabled = false;
+        btn.textContent = 'Convert';
+      } catch (e) {
+        showError(e.message || 'Download failed');
+        btn.disabled = false;
+        btn.textContent = 'Convert';
+      }
+    }
+
+    function downloadBlob(data, filename, mime) {
+      const blob = new Blob([data], { type: mime });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
     }
 
     async function pollStatus() {

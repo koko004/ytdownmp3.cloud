@@ -12,6 +12,7 @@ const CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || '2', 10);
 const JOB_TIMEOUT = parseInt(process.env.JOB_TIMEOUT || '120000', 10);
 const HEALTH_PORT = parseInt(process.env.HEALTH_PORT || '3000', 10);
 const COOKIES_FILE = process.env.COOKIES_FILE || '/app/cookies.txt';
+const WARP_PROXY = process.env.WARP_PROXY || '';
 
 if (!fs.existsSync(DOWNLOADS_DIR)) {
   fs.mkdirSync(DOWNLOADS_DIR, { recursive: true });
@@ -19,8 +20,59 @@ if (!fs.existsSync(DOWNLOADS_DIR)) {
 
 const redisClient = new Redis({ host: REDIS_HOST, port: REDIS_PORT, maxRetriesPerRequest: 1 });
 
-const hasCookiesFile = fs.existsSync(COOKIES_FILE);
-console.log(`[Worker] Cookies file: ${hasCookiesFile ? COOKIES_FILE : 'NOT FOUND'}`);
+// ========== LOG STREAMING ==========
+const LOG_CHANNEL = 'logs:stream';
+const LOG_BUFFER_KEY = 'logs:buffer';
+const logPublisher = new Redis({ host: REDIS_HOST, port: REDIS_PORT, maxRetriesPerRequest: 1 });
+
+function publishLog(level, ...args) {
+  const msg = JSON.stringify({ t: Date.now(), l: level, s: 'worker', m: args.join(' ') });
+  logPublisher.publish(LOG_CHANNEL, msg).catch(() => {});
+  logPublisher.rpush(LOG_BUFFER_KEY, msg).then(() => {
+    logPublisher.ltrim(LOG_BUFFER_KEY, -2000, -1).catch(() => {});
+  }).catch(() => {});
+}
+
+const _origLog = console.log;
+const _origError = console.error;
+const _origWarn = console.warn;
+console.log = (...a) => { _origLog(...a); publishLog('info', ...a); };
+console.error = (...a) => { _origError(...a); publishLog('error', ...a); };
+console.warn = (...a) => { _origWarn(...a); publishLog('warn', ...a); };
+
+// ========== COOKIES SYNC FROM REDIS ==========
+async function syncCookiesFile() {
+  try {
+    const content = await redisClient.get('config:cookies');
+    if (content) {
+      try { fs.chmodSync(COOKIES_FILE, 0o644); } catch (e) {}
+      fs.writeFileSync(COOKIES_FILE, content);
+      return true;
+    }
+  } catch (e) {}
+  return false;
+}
+
+function getCookiesCopy() {
+  const tmpFile = COOKIES_FILE + '.' + Date.now() + '.tmp';
+  if (fs.existsSync(COOKIES_FILE)) {
+    fs.copyFileSync(COOKIES_FILE, tmpFile);
+    return tmpFile;
+  }
+  return null;
+}
+
+function releaseCookiesCopy(tmpFile) {
+  try { if (tmpFile && fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (e) {}
+}
+
+function hasCookies() {
+  return fs.existsSync(COOKIES_FILE) && fs.statSync(COOKIES_FILE).size > 10;
+}
+
+syncCookiesFile().then(ok => {
+  console.log(`[Worker] Cookies: ${ok ? 'synced from Redis' : (hasCookies() ? 'file exists' : 'NOT FOUND')}`);
+});
 console.log(`[Worker] Concurrency: ${CONCURRENCY}, Timeout: ${JOB_TIMEOUT}ms`);
 
 async function getAdminProxies() {
@@ -34,18 +86,21 @@ async function getAdminProxies() {
   }
 }
 
-function buildYtDlpArgs(baseArgs, proxyUrl) {
+function buildYtDlpArgs(baseArgs, proxyUrl, extractorArgs, cookiesFile) {
   const args = [...baseArgs];
 
   if (proxyUrl) {
     args.push('--proxy', proxyUrl);
   }
 
-  if (hasCookiesFile) {
-    args.push('--cookies', COOKIES_FILE);
+  if (cookiesFile) {
+    args.push('--cookies', cookiesFile);
   }
 
-  args.push('--extractor-args', 'youtube:player_client=web_safari');
+  if (extractorArgs) {
+    args.push('--extractor-args', extractorArgs);
+  }
+
   args.push('--no-check-certificate');
   args.push('--sleep-requests', '1');
   args.push('--sleep-interval', '3');
@@ -66,30 +121,46 @@ async function tryYtDlp(args, timeout = 30000) {
 async function getVideoInfoWithFallback(url) {
   const baseArgs = ['--dump-json', '--no-playlist', '--no-warnings'];
 
-  const adminProxies = await getAdminProxies();
-  const strategies = [
-    ...adminProxies.map(p => ({ name: p.name, proxy: p.url })),
-    { name: 'Direct', proxy: null },
-  ];
+  // Sync cookies from Redis before attempting
+  await syncCookiesFile();
+  const cookiesCopy = getCookiesCopy();
 
-  for (const strategy of strategies) {
-    try {
-      const args = buildYtDlpArgs(baseArgs, strategy.proxy);
-      args.push(url);
-      console.log(`[Worker] Trying info via ${strategy.name}${strategy.proxy ? ' (' + strategy.proxy.substring(0, 30) + '...)' : ''}`);
-      const stdout = await tryYtDlp(args, 30000);
-      console.log(`[Worker] Info fetched via ${strategy.name}`);
-      return JSON.parse(stdout);
-    } catch (err) {
-      console.warn(`[Worker] ${strategy.name} failed for info: ${err.message.slice(0, 200)}`);
+  try {
+    const adminProxies = await getAdminProxies();
+    const strategies = [
+      ...(WARP_PROXY ? [{ name: 'WARP', proxy: WARP_PROXY, id: null }] : []),
+      { name: 'Direct', proxy: null, id: null },
+      ...adminProxies.slice(0, 8).map(p => ({ name: p.name, proxy: p.url, id: p.id })),
+    ];
+
+    for (const strategy of strategies) {
+      try {
+        const args = buildYtDlpArgs(baseArgs, strategy.proxy, '', cookiesCopy);
+        args.push(url);
+        console.log(`[Worker] Trying info via ${strategy.name}${strategy.proxy ? ' (' + strategy.proxy.substring(0, 30) + '...)' : ''}`);
+        const stdout = await tryYtDlp(args, 30000);
+        console.log(`[Worker] Info fetched via ${strategy.name}`);
+        return JSON.parse(stdout);
+      } catch (err) {
+        console.warn(`[Worker] ${strategy.name} failed for info: ${err.message.slice(0, 200)}`);
+        if (strategy.id && isBlockedByYouTube(err.message)) {
+          disableBlockedProxy(strategy.id, 'YouTube blocked: ' + err.message.slice(0, 100));
+        }
+      }
     }
-  }
 
-  throw new Error('All strategies failed to fetch video info');
+    throw new Error('All strategies failed to fetch video info');
+  } finally {
+    releaseCookiesCopy(cookiesCopy);
+  }
 }
 
 async function downloadAndConvertWithFallback(jobId, url, format, job) {
   const outputFile = path.join(DOWNLOADS_DIR, `${jobId}.${format}`);
+
+  // Sync cookies from Redis before attempting
+  await syncCookiesFile();
+  const cookiesCopy = getCookiesCopy();
 
   let baseArgs;
   if (format === 'mp3') {
@@ -109,63 +180,71 @@ async function downloadAndConvertWithFallback(jobId, url, format, job) {
 
   const adminProxies = await getAdminProxies();
   const strategies = [
-    ...adminProxies.map(p => ({ name: p.name, proxy: p.url })),
-    { name: 'Direct', proxy: null },
+    ...(WARP_PROXY ? [{ name: 'WARP', proxy: WARP_PROXY, id: null }] : []),
+    { name: 'Direct', proxy: null, id: null },
+    ...adminProxies.slice(0, 8).map(p => ({ name: p.name, proxy: p.url, id: p.id })),
   ];
 
-  for (const strategy of strategies) {
-    try {
-      const args = buildYtDlpArgs(baseArgs, strategy.proxy);
-      args.push(url);
-      console.log(`[Worker] Downloading via ${strategy.name}${strategy.proxy ? ' (' + strategy.proxy.substring(0, 30) + '...)' : ''}`);
+  try {
+    for (const strategy of strategies) {
+      try {
+        const args = buildYtDlpArgs(baseArgs, strategy.proxy, '', cookiesCopy);
+        args.push(url);
+        console.log(`[Worker] Downloading via ${strategy.name}${strategy.proxy ? ' (' + strategy.proxy.substring(0, 30) + '...)' : ''}`);
 
-      const result = await new Promise((resolve, reject) => {
-        const proc = spawn('yt-dlp', args);
-        let lastProgress = 10;
-        let stderrData = '';
-        const progressRegex = /(\d+\.?\d*)%/;
+        const result = await new Promise((resolve, reject) => {
+          const proc = spawn('yt-dlp', args);
+          let lastProgress = 10;
+          let stderrData = '';
+          const progressRegex = /(\d+\.?\d*)%/;
 
-        proc.stdout.on('data', (data) => {
-          const text = data.toString();
-          stderrData += text;
-          const match = text.match(progressRegex);
-          if (match) {
-            const progress = Math.min(parseFloat(match[1]), 99);
-            if (progress > lastProgress) {
-              lastProgress = progress;
-              job.updateProgress(progress);
+          proc.stdout.on('data', (data) => {
+            const text = data.toString();
+            stderrData += text;
+            const match = text.match(progressRegex);
+            if (match) {
+              const progress = Math.min(parseFloat(match[1]), 99);
+              if (progress > lastProgress) {
+                lastProgress = progress;
+                job.updateProgress(progress);
+              }
             }
-          }
-        });
+          });
 
-        proc.stderr.on('data', (data) => {
-          const text = data.toString();
-          stderrData += text;
-          const match = text.match(progressRegex);
-          if (match) {
-            const progress = Math.min(parseFloat(match[1]), 99);
-            if (progress > lastProgress) {
-              lastProgress = progress;
-              job.updateProgress(progress);
+          proc.stderr.on('data', (data) => {
+            const text = data.toString();
+            stderrData += text;
+            const match = text.match(progressRegex);
+            if (match) {
+              const progress = Math.min(parseFloat(match[1]), 99);
+              if (progress > lastProgress) {
+                lastProgress = progress;
+                job.updateProgress(progress);
+              }
             }
-          }
+          });
+
+          proc.on('close', (code) => {
+            if (code === 0) resolve(outputFile);
+            else reject(new Error(`exit ${code}: ${stderrData.slice(0, 500)}`));
+          });
+          proc.on('error', reject);
         });
 
-        proc.on('close', (code) => {
-          if (code === 0) resolve(outputFile);
-          else reject(new Error(`exit ${code}: ${stderrData.slice(0, 500)}`));
-        });
-        proc.on('error', reject);
-      });
-
-      console.log(`[Worker] Download completed via ${strategy.name}`);
-      return result;
-    } catch (err) {
-      console.warn(`[Worker] ${strategy.name} failed for download: ${err.message.slice(0, 200)}`);
+        console.log(`[Worker] Download completed via ${strategy.name}`);
+        return result;
+      } catch (err) {
+        console.warn(`[Worker] ${strategy.name} failed for download: ${err.message.slice(0, 200)}`);
+        if (strategy.id && isBlockedByYouTube(err.message)) {
+          disableBlockedProxy(strategy.id, 'YouTube blocked: ' + err.message.slice(0, 100));
+        }
+      }
     }
-  }
 
-  throw new Error('All strategies failed to download video');
+    throw new Error('All strategies failed to download video');
+  } finally {
+    releaseCookiesCopy(cookiesCopy);
+  }
 }
 
 const healthServer = http.createServer((req, res) => {
@@ -177,6 +256,28 @@ const healthServer = http.createServer((req, res) => {
     res.end();
   }
 });
+
+const ADMIN_URL = process.env.ADMIN_URL || 'http://admin:4000';
+
+async function disableBlockedProxy(proxyId, reason) {
+  try {
+    await fetch(`${ADMIN_URL}/api/proxies/${proxyId}/disable`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    });
+    console.log(`[Worker] Proxy ${proxyId} auto-disabled: ${reason}`);
+  } catch (e) {
+    console.warn(`[Worker] Failed to disable proxy ${proxyId}: ${e.message}`);
+  }
+}
+
+function isBlockedByYouTube(errMsg) {
+  return errMsg.includes('Sign in to confirm') ||
+         errMsg.includes('not a bot') ||
+         errMsg.includes('blocked') ||
+         errMsg.includes('Request blocked');
+}
 
 healthServer.listen(HEALTH_PORT, '0.0.0.0', () => {
   console.log(`[Worker] Health server listening on port ${HEALTH_PORT}`);
